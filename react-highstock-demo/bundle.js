@@ -1,4 +1,2632 @@
 (function e(t,n,r){function s(o,u){if(!n[o]){if(!t[o]){var a=typeof require=="function"&&require;if(!u&&a)return a(o,!0);if(i)return i(o,!0);var f=new Error("Cannot find module '"+o+"'");throw f.code="MODULE_NOT_FOUND",f}var l=n[o]={exports:{}};t[o][0].call(l.exports,function(e){var n=t[o][1][e];return s(n?n:e)},l,l.exports,e,t,n,r)}return n[o].exports}var i=typeof require=="function"&&require;for(var o=0;o<r.length;o++)s(r[o]);return s})({1:[function(require,module,exports){
+// ==ClosureCompiler==
+// @compilation_level SIMPLE_OPTIMIZATIONS
+
+/**
+ * @license Highcharts JS v4.1.7-modified ()
+ *
+ * (c) 2009-2014 Torstein Honsi
+ *
+ * License: www.highcharts.com/license
+ */
+
+// JSLint options:
+/*global Highcharts, HighchartsAdapter, document, window, navigator, setInterval, clearInterval, clearTimeout, setTimeout, location, jQuery, $, console */
+
+(function (Highcharts, UNDEFINED) {
+var arrayMin = Highcharts.arrayMin,
+	arrayMax = Highcharts.arrayMax,
+	each = Highcharts.each,
+	extend = Highcharts.extend,
+	merge = Highcharts.merge,
+	map = Highcharts.map,
+	pick = Highcharts.pick,
+	pInt = Highcharts.pInt,
+	defaultPlotOptions = Highcharts.getOptions().plotOptions,
+	seriesTypes = Highcharts.seriesTypes,
+	extendClass = Highcharts.extendClass,
+	splat = Highcharts.splat,
+	wrap = Highcharts.wrap,
+	Axis = Highcharts.Axis,
+	Tick = Highcharts.Tick,
+	Point = Highcharts.Point,
+	Pointer = Highcharts.Pointer,
+	CenteredSeriesMixin = Highcharts.CenteredSeriesMixin,
+	TrackerMixin = Highcharts.TrackerMixin,
+	Series = Highcharts.Series,
+	math = Math,
+	mathRound = math.round,
+	mathFloor = math.floor,
+	mathMax = math.max,
+	Color = Highcharts.Color,
+	noop = function () {};/**
+ * The Pane object allows options that are common to a set of X and Y axes.
+ * 
+ * In the future, this can be extended to basic Highcharts and Highstock.
+ */
+function Pane(options, chart, firstAxis) {
+	this.init.call(this, options, chart, firstAxis);
+}
+
+// Extend the Pane prototype
+extend(Pane.prototype, {
+	
+	/**
+	 * Initiate the Pane object
+	 */
+	init: function (options, chart, firstAxis) {
+		var pane = this,
+			backgroundOption,
+			defaultOptions = pane.defaultOptions;
+		
+		pane.chart = chart;
+		
+		// Set options. Angular charts have a default background (#3318)
+		pane.options = options = merge(defaultOptions, chart.angular ? { background: {} } : undefined, options);
+		
+		backgroundOption = options.background;
+		
+		// To avoid having weighty logic to place, update and remove the backgrounds,
+		// push them to the first axis' plot bands and borrow the existing logic there.
+		if (backgroundOption) {
+			each([].concat(splat(backgroundOption)).reverse(), function (config) {
+				var backgroundColor = config.backgroundColor,  // if defined, replace the old one (specific for gradients)
+					axisUserOptions = firstAxis.userOptions;
+				config = merge(pane.defaultBackgroundOptions, config);
+				if (backgroundColor) {
+					config.backgroundColor = backgroundColor;
+				}
+				config.color = config.backgroundColor; // due to naming in plotBands
+				firstAxis.options.plotBands.unshift(config);
+				axisUserOptions.plotBands = axisUserOptions.plotBands || []; // #3176
+				axisUserOptions.plotBands.unshift(config);
+			});
+		}
+	},
+	
+	/**
+	 * The default options object
+	 */
+	defaultOptions: {
+		// background: {conditional},
+		center: ['50%', '50%'],
+		size: '85%',
+		startAngle: 0
+		//endAngle: startAngle + 360
+	},	
+	
+	/**
+	 * The default background options
+	 */
+	defaultBackgroundOptions: {
+		shape: 'circle',
+		borderWidth: 1,
+		borderColor: 'silver',
+		backgroundColor: {
+			linearGradient: { x1: 0, y1: 0, x2: 0, y2: 1 },
+			stops: [
+				[0, '#FFF'],
+				[1, '#DDD']
+			]
+		},
+		from: -Number.MAX_VALUE, // corrected to axis min
+		innerRadius: 0,
+		to: Number.MAX_VALUE, // corrected to axis max
+		outerRadius: '105%'
+	}
+	
+});
+var axisProto = Axis.prototype,
+	tickProto = Tick.prototype;
+	
+/**
+ * Augmented methods for the x axis in order to hide it completely, used for the X axis in gauges
+ */
+var hiddenAxisMixin = {
+	getOffset: noop,
+	redraw: function () {
+		this.isDirty = false; // prevent setting Y axis dirty
+	},
+	render: function () {
+		this.isDirty = false; // prevent setting Y axis dirty
+	},
+	setScale: noop,
+	setCategories: noop,
+	setTitle: noop
+};
+
+/**
+ * Augmented methods for the value axis
+ */
+/*jslint unparam: true*/
+var radialAxisMixin = {
+	isRadial: true,
+	
+	/**
+	 * The default options extend defaultYAxisOptions
+	 */
+	defaultRadialGaugeOptions: {
+		labels: {
+			align: 'center',
+			x: 0,
+			y: null // auto
+		},
+		minorGridLineWidth: 0,
+		minorTickInterval: 'auto',
+		minorTickLength: 10,
+		minorTickPosition: 'inside',
+		minorTickWidth: 1,
+		tickLength: 10,
+		tickPosition: 'inside',
+		tickWidth: 2,
+		title: {
+			rotation: 0
+		},
+		zIndex: 2 // behind dials, points in the series group
+	},
+	
+	// Circular axis around the perimeter of a polar chart
+	defaultRadialXOptions: {
+		gridLineWidth: 1, // spokes
+		labels: {
+			align: null, // auto
+			distance: 15,
+			x: 0,
+			y: null // auto
+		},
+		maxPadding: 0,
+		minPadding: 0,
+		showLastLabel: false, 
+		tickLength: 0
+	},
+	
+	// Radial axis, like a spoke in a polar chart
+	defaultRadialYOptions: {
+		gridLineInterpolation: 'circle',
+		labels: {
+			align: 'right',
+			x: -3,
+			y: -2
+		},
+		showLastLabel: false,
+		title: {
+			x: 4,
+			text: null,
+			rotation: 90
+		}
+	},
+	
+	/**
+	 * Merge and set options
+	 */
+	setOptions: function (userOptions) {
+		
+		var options = this.options = merge(
+			this.defaultOptions,
+			this.defaultRadialOptions,
+			userOptions
+		);
+
+		// Make sure the plotBands array is instanciated for each Axis (#2649)
+		if (!options.plotBands) {
+			options.plotBands = [];
+		}
+		
+	},
+	
+	/**
+	 * Wrap the getOffset method to return zero offset for title or labels in a radial 
+	 * axis
+	 */
+	getOffset: function () {
+		// Call the Axis prototype method (the method we're in now is on the instance)
+		axisProto.getOffset.call(this);
+		
+		// Title or label offsets are not counted
+		this.chart.axisOffset[this.side] = 0;
+		
+		// Set the center array
+		this.center = this.pane.center = CenteredSeriesMixin.getCenter.call(this.pane);
+	},
+
+
+	/**
+	 * Get the path for the axis line. This method is also referenced in the getPlotLinePath
+	 * method.
+	 */
+	getLinePath: function (lineWidth, radius) {
+		var center = this.center;
+		radius = pick(radius, center[2] / 2 - this.offset);
+		
+		return this.chart.renderer.symbols.arc(
+			this.left + center[0],
+			this.top + center[1],
+			radius,
+			radius, 
+			{
+				start: this.startAngleRad,
+				end: this.endAngleRad,
+				open: true,
+				innerR: 0
+			}
+		);
+	},
+
+	/**
+	 * Override setAxisTranslation by setting the translation to the difference
+	 * in rotation. This allows the translate method to return angle for 
+	 * any given value.
+	 */
+	setAxisTranslation: function () {
+		
+		// Call uber method		
+		axisProto.setAxisTranslation.call(this);
+			
+		// Set transA and minPixelPadding
+		if (this.center) { // it's not defined the first time
+			if (this.isCircular) {
+				
+				this.transA = (this.endAngleRad - this.startAngleRad) / 
+					((this.max - this.min) || 1);
+					
+				
+			} else { 
+				this.transA = (this.center[2] / 2) / ((this.max - this.min) || 1);
+			}
+			
+			if (this.isXAxis) {
+				this.minPixelPadding = this.transA * this.minPointOffset;
+			} else {
+				// This is a workaround for regression #2593, but categories still don't position correctly.
+				// TODO: Implement true handling of Y axis categories on gauges.
+				this.minPixelPadding = 0; 
+			}
+		}
+	},
+	
+	/**
+	 * In case of auto connect, add one closestPointRange to the max value right before
+	 * tickPositions are computed, so that ticks will extend passed the real max.
+	 */
+	beforeSetTickPositions: function () {
+		if (this.autoConnect) {
+			this.max += (this.categories && 1) || this.pointRange || this.closestPointRange || 0; // #1197, #2260
+		}
+	},
+	
+	/**
+	 * Override the setAxisSize method to use the arc's circumference as length. This
+	 * allows tickPixelInterval to apply to pixel lengths along the perimeter
+	 */
+	setAxisSize: function () {
+		
+		axisProto.setAxisSize.call(this);
+
+		if (this.isRadial) {
+
+			// Set the center array
+			this.center = this.pane.center = Highcharts.CenteredSeriesMixin.getCenter.call(this.pane);
+
+			// The sector is used in Axis.translate to compute the translation of reversed axis points (#2570)
+			if (this.isCircular) {
+				this.sector = this.endAngleRad - this.startAngleRad;	
+			}
+			
+			// Axis len is used to lay out the ticks
+			this.len = this.width = this.height = this.center[2] * pick(this.sector, 1) / 2;
+
+
+		}
+	},
+	
+	/**
+	 * Returns the x, y coordinate of a point given by a value and a pixel distance
+	 * from center
+	 */
+	getPosition: function (value, length) {
+		return this.postTranslate(
+			this.isCircular ? this.translate(value) : 0, // #2848
+			pick(this.isCircular ? length : this.translate(value), this.center[2] / 2) - this.offset
+		);		
+	},
+	
+	/**
+	 * Translate from intermediate plotX (angle), plotY (axis.len - radius) to final chart coordinates. 
+	 */
+	postTranslate: function (angle, radius) {
+		
+		var chart = this.chart,
+			center = this.center;
+			
+		angle = this.startAngleRad + angle;
+
+		return {
+			x: chart.plotLeft + center[0] + Math.cos(angle) * radius,
+			y: chart.plotTop + center[1] + Math.sin(angle) * radius
+		}; 
+		
+	},
+	
+	/**
+	 * Find the path for plot bands along the radial axis
+	 */
+	getPlotBandPath: function (from, to, options) {
+		var center = this.center,
+			startAngleRad = this.startAngleRad,
+			fullRadius = center[2] / 2,
+			radii = [
+				pick(options.outerRadius, '100%'),
+				options.innerRadius,
+				pick(options.thickness, 10)
+			],
+			percentRegex = /%$/,
+			start,
+			end,
+			open,
+			isCircular = this.isCircular, // X axis in a polar chart
+			ret;
+			
+		// Polygonal plot bands
+		if (this.options.gridLineInterpolation === 'polygon') {
+			ret = this.getPlotLinePath(from).concat(this.getPlotLinePath(to, true));
+		
+		// Circular grid bands
+		} else {
+
+			// Keep within bounds
+			from = Math.max(from, this.min);
+			to = Math.min(to, this.max);
+			
+			// Plot bands on Y axis (radial axis) - inner and outer radius depend on to and from
+			if (!isCircular) {
+				radii[0] = this.translate(from);
+				radii[1] = this.translate(to);
+			}
+			
+			// Convert percentages to pixel values
+			radii = map(radii, function (radius) {
+				if (percentRegex.test(radius)) {
+					radius = (pInt(radius, 10) * fullRadius) / 100;
+				}
+				return radius;
+			});
+			
+			// Handle full circle
+			if (options.shape === 'circle' || !isCircular) {
+				start = -Math.PI / 2;
+				end = Math.PI * 1.5;
+				open = true;
+			} else {
+				start = startAngleRad + this.translate(from);
+				end = startAngleRad + this.translate(to);
+			}
+		
+		
+			ret = this.chart.renderer.symbols.arc(
+				this.left + center[0],
+				this.top + center[1],
+				radii[0],
+				radii[0],
+				{
+					start: Math.min(start, end), // Math is for reversed yAxis (#3606)
+					end: Math.max(start, end),
+					innerR: pick(radii[1], radii[0] - radii[2]),
+					open: open
+				}
+			);
+		}
+
+		return ret;
+	},
+	
+	/**
+	 * Find the path for plot lines perpendicular to the radial axis.
+	 */
+	getPlotLinePath: function (value, reverse) {
+		var axis = this,
+			center = axis.center,
+			chart = axis.chart,
+			end = axis.getPosition(value),
+			xAxis,
+			xy,
+			tickPositions,
+			ret;
+		
+		// Spokes
+		if (axis.isCircular) {
+			ret = ['M', center[0] + chart.plotLeft, center[1] + chart.plotTop, 'L', end.x, end.y];
+		
+		// Concentric circles			
+		} else if (axis.options.gridLineInterpolation === 'circle') {
+			value = axis.translate(value);
+			if (value) { // a value of 0 is in the center
+				ret = axis.getLinePath(0, value);
+			}
+		// Concentric polygons 
+		} else {
+			// Find the X axis in the same pane
+			each(chart.xAxis, function (a) {
+				if (a.pane === axis.pane) {
+					xAxis = a;
+				}
+			});
+			ret = [];
+			value = axis.translate(value);
+			tickPositions = xAxis.tickPositions;
+			if (xAxis.autoConnect) {
+				tickPositions = tickPositions.concat([tickPositions[0]]);
+			}
+			// Reverse the positions for concatenation of polygonal plot bands
+			if (reverse) {
+				tickPositions = [].concat(tickPositions).reverse();
+			}
+				
+			each(tickPositions, function (pos, i) {
+				xy = xAxis.getPosition(pos, value);
+				ret.push(i ? 'L' : 'M', xy.x, xy.y);
+			});
+			
+		}
+		return ret;
+	},
+	
+	/**
+	 * Find the position for the axis title, by default inside the gauge
+	 */
+	getTitlePosition: function () {
+		var center = this.center,
+			chart = this.chart,
+			titleOptions = this.options.title;
+		
+		return { 
+			x: chart.plotLeft + center[0] + (titleOptions.x || 0), 
+			y: chart.plotTop + center[1] - ({ high: 0.5, middle: 0.25, low: 0 }[titleOptions.align] * 
+				center[2]) + (titleOptions.y || 0)  
+		};
+	}
+	
+};
+/*jslint unparam: false*/
+
+/**
+ * Override axisProto.init to mix in special axis instance functions and function overrides
+ */
+wrap(axisProto, 'init', function (proceed, chart, userOptions) {
+	var axis = this,
+		angular = chart.angular,
+		polar = chart.polar,
+		isX = userOptions.isX,
+		isHidden = angular && isX,
+		isCircular,
+		startAngleRad,
+		endAngleRad,
+		options,
+		chartOptions = chart.options,
+		paneIndex = userOptions.pane || 0,
+		pane,
+		paneOptions;
+		
+	// Before prototype.init
+	if (angular) {
+		extend(this, isHidden ? hiddenAxisMixin : radialAxisMixin);
+		isCircular =  !isX;
+		if (isCircular) {
+			this.defaultRadialOptions = this.defaultRadialGaugeOptions;
+		}
+		
+	} else if (polar) {
+		//extend(this, userOptions.isX ? radialAxisMixin : radialAxisMixin);
+		extend(this, radialAxisMixin);
+		isCircular = isX;
+		this.defaultRadialOptions = isX ? this.defaultRadialXOptions : merge(this.defaultYAxisOptions, this.defaultRadialYOptions);
+		
+	}
+	
+	// Run prototype.init
+	proceed.call(this, chart, userOptions);
+	
+	if (!isHidden && (angular || polar)) {
+		options = this.options;
+		
+		// Create the pane and set the pane options.
+		if (!chart.panes) {
+			chart.panes = [];
+		}
+		this.pane = pane = chart.panes[paneIndex] = chart.panes[paneIndex] || new Pane(
+			splat(chartOptions.pane)[paneIndex],
+			chart,
+			axis
+		);
+		paneOptions = pane.options;
+		
+			
+		// Disable certain features on angular and polar axes
+		chart.inverted = false;
+		chartOptions.chart.zoomType = null;
+		
+		// Start and end angle options are
+		// given in degrees relative to top, while internal computations are
+		// in radians relative to right (like SVG).
+		this.startAngleRad = startAngleRad = (paneOptions.startAngle - 90) * Math.PI / 180;
+		this.endAngleRad = endAngleRad = (pick(paneOptions.endAngle, paneOptions.startAngle + 360)  - 90) * Math.PI / 180;
+		this.offset = options.offset || 0;
+		
+		this.isCircular = isCircular;
+		
+		// Automatically connect grid lines?
+		if (isCircular && userOptions.max === UNDEFINED && endAngleRad - startAngleRad === 2 * Math.PI) {
+			this.autoConnect = true;
+		}
+	}
+	
+});
+
+/**
+ * Add special cases within the Tick class' methods for radial axes.
+ */	
+wrap(tickProto, 'getPosition', function (proceed, horiz, pos, tickmarkOffset, old) {
+	var axis = this.axis;
+	
+	return axis.getPosition ? 
+		axis.getPosition(pos) :
+		proceed.call(this, horiz, pos, tickmarkOffset, old);	
+});
+
+/**
+ * Wrap the getLabelPosition function to find the center position of the label
+ * based on the distance option
+ */	
+wrap(tickProto, 'getLabelPosition', function (proceed, x, y, label, horiz, labelOptions, tickmarkOffset, index, step) {
+	var axis = this.axis,
+		optionsY = labelOptions.y,
+		ret,
+		centerSlot = 20, // 20 degrees to each side at the top and bottom
+		align = labelOptions.align,
+		angle = ((axis.translate(this.pos) + axis.startAngleRad + Math.PI / 2) / Math.PI * 180) % 360;
+
+	if (axis.isRadial) {
+		ret = axis.getPosition(this.pos, (axis.center[2] / 2) + pick(labelOptions.distance, -25));
+		
+		// Automatically rotated
+		if (labelOptions.rotation === 'auto') {
+			label.attr({ 
+				rotation: angle
+			});
+		
+		// Vertically centered
+		} else if (optionsY === null) {
+			optionsY = axis.chart.renderer.fontMetrics(label.styles.fontSize).b - label.getBBox().height / 2;
+		}
+		
+		// Automatic alignment
+		if (align === null) {
+			if (axis.isCircular) {
+				if (this.label.getBBox().width > axis.len * axis.tickInterval / (axis.max - axis.min)) { // #3506
+					centerSlot = 0;
+				}
+				if (angle > centerSlot && angle < 180 - centerSlot) {
+					align = 'left'; // right hemisphere
+				} else if (angle > 180 + centerSlot && angle < 360 - centerSlot) {
+					align = 'right'; // left hemisphere
+				} else {
+					align = 'center'; // top or bottom
+				}
+			} else {
+				align = 'center';
+			}
+			label.attr({
+				align: align
+			});
+		}
+		
+		ret.x += labelOptions.x;
+		ret.y += optionsY;
+		
+	} else {
+		ret = proceed.call(this, x, y, label, horiz, labelOptions, tickmarkOffset, index, step);
+	}
+	return ret;
+});
+
+/**
+ * Wrap the getMarkPath function to return the path of the radial marker
+ */
+wrap(tickProto, 'getMarkPath', function (proceed, x, y, tickLength, tickWidth, horiz, renderer) {
+	var axis = this.axis,
+		endPoint,
+		ret;
+		
+	if (axis.isRadial) {
+		endPoint = axis.getPosition(this.pos, axis.center[2] / 2 + tickLength);
+		ret = [
+			'M',
+			x,
+			y,
+			'L',
+			endPoint.x,
+			endPoint.y
+		];
+	} else {
+		ret = proceed.call(this, x, y, tickLength, tickWidth, horiz, renderer);
+	}
+	return ret;
+});/* 
+ * The AreaRangeSeries class
+ * 
+ */
+
+/**
+ * Extend the default options with map options
+ */
+defaultPlotOptions.arearange = merge(defaultPlotOptions.area, {
+	lineWidth: 1,
+	marker: null,
+	threshold: null,
+	tooltip: {
+		pointFormat: '<span style="color:{series.color}">\u25CF</span> {series.name}: <b>{point.low}</b> - <b>{point.high}</b><br/>'
+	},
+	trackByArea: true,
+	dataLabels: {
+		align: null,
+		verticalAlign: null,
+		xLow: 0,
+		xHigh: 0,
+		yLow: 0,
+		yHigh: 0	
+	},
+	states: {
+		hover: {
+			halo: false
+		}
+	}
+});
+
+/**
+ * Add the series type
+ */
+seriesTypes.arearange = extendClass(seriesTypes.area, {
+	type: 'arearange',
+	pointArrayMap: ['low', 'high'],
+	dataLabelCollections: ['dataLabel', 'dataLabelUpper'],
+	toYData: function (point) {
+		return [point.low, point.high];
+	},
+	pointValKey: 'low',
+	deferTranslatePolar: true,
+
+	/**
+	 * Translate a point's plotHigh from the internal angle and radius measures to 
+	 * true plotHigh coordinates. This is an addition of the toXY method found in
+	 * Polar.js, because it runs too early for arearanges to be considered (#3419).
+	 */
+	highToXY: function (point) {
+		// Find the polar plotX and plotY
+		var chart = this.chart,
+			xy = this.xAxis.postTranslate(point.rectPlotX, this.yAxis.len - point.plotHigh);
+		point.plotHighX = xy.x - chart.plotLeft;
+		point.plotHigh = xy.y - chart.plotTop;
+	},
+	
+	/**
+	 * Extend getSegments to force null points if the higher value is null. #1703.
+	 */
+	getSegments: function () {
+		var series = this;
+
+		each(series.points, function (point) {
+			if (!series.options.connectNulls && (point.low === null || point.high === null)) {
+				point.y = null;
+			} else if (point.low === null && point.high !== null) {
+				point.y = point.high;
+			}
+		});
+		Series.prototype.getSegments.call(this);
+	},
+	
+	/**
+	 * Translate data points from raw values x and y to plotX and plotY
+	 */
+	translate: function () {
+		var series = this,
+			yAxis = series.yAxis;
+
+		seriesTypes.area.prototype.translate.apply(series);
+
+		// Set plotLow and plotHigh
+		each(series.points, function (point) {
+
+			var low = point.low,
+				high = point.high,
+				plotY = point.plotY;
+
+			if (high === null && low === null) {
+				point.y = null;
+			} else if (low === null) {
+				point.plotLow = point.plotY = null;
+				point.plotHigh = yAxis.translate(high, 0, 1, 0, 1);
+			} else if (high === null) {
+				point.plotLow = plotY;
+				point.plotHigh = null;
+			} else {
+				point.plotLow = plotY;
+				point.plotHigh = yAxis.translate(high, 0, 1, 0, 1);
+			}
+		});
+
+		// Postprocess plotHigh
+		if (this.chart.polar) {
+			each(this.points, function (point) {
+				series.highToXY(point);
+			});
+		}
+	},
+	
+	/**
+	 * Extend the line series' getSegmentPath method by applying the segment
+	 * path to both lower and higher values of the range
+	 */
+	getSegmentPath: function (segment) {
+		
+		var lowSegment,
+			highSegment = [],
+			i = segment.length,
+			baseGetSegmentPath = Series.prototype.getSegmentPath,
+			point,
+			linePath,
+			lowerPath,
+			options = this.options,
+			step = options.step,
+			higherPath;
+			
+		// Remove nulls from low segment
+		lowSegment = HighchartsAdapter.grep(segment, function (point) {
+			return point.plotLow !== null;
+		});
+		
+		// Make a segment with plotX and plotY for the top values
+		while (i--) {
+			point = segment[i];
+			if (point.plotHigh !== null) {
+				highSegment.push({
+					plotX: point.plotHighX || point.plotX, // plotHighX is for polar charts
+					plotY: point.plotHigh
+				});
+			}
+		}
+		
+		// Get the paths
+		lowerPath = baseGetSegmentPath.call(this, lowSegment);
+		if (step) {
+			if (step === true) {
+				step = 'left';
+			}
+			options.step = { left: 'right', center: 'center', right: 'left' }[step]; // swap for reading in getSegmentPath
+		}
+		higherPath = baseGetSegmentPath.call(this, highSegment);
+		options.step = step;
+		
+		// Create a line on both top and bottom of the range
+		linePath = [].concat(lowerPath, higherPath);
+		
+		// For the area path, we need to change the 'move' statement into 'lineTo' or 'curveTo'
+		if (!this.chart.polar) {
+			higherPath[0] = 'L'; // this probably doesn't work for spline
+		}
+		this.areaPath = this.areaPath.concat(lowerPath, higherPath);
+		
+		return linePath;
+	},
+	
+	/**
+	 * Extend the basic drawDataLabels method by running it for both lower and higher
+	 * values.
+	 */
+	drawDataLabels: function () {
+		
+		var data = this.data,
+			length = data.length,
+			i,
+			originalDataLabels = [],
+			seriesProto = Series.prototype,
+			dataLabelOptions = this.options.dataLabels,
+			align = dataLabelOptions.align,
+			point,
+			up,
+			inverted = this.chart.inverted;
+			
+		if (dataLabelOptions.enabled || this._hasPointLabels) {
+			
+			// Step 1: set preliminary values for plotY and dataLabel and draw the upper labels
+			i = length;
+			while (i--) {
+				point = data[i];
+				if (point) {
+					up = point.plotHigh > point.plotLow;
+					
+					// Set preliminary values
+					point.y = point.high;
+					point._plotY = point.plotY;
+					point.plotY = point.plotHigh;
+					
+					// Store original data labels and set preliminary label objects to be picked up 
+					// in the uber method
+					originalDataLabels[i] = point.dataLabel;
+					point.dataLabel = point.dataLabelUpper;
+					
+					// Set the default offset
+					point.below = up;
+					if (inverted) {
+						if (!align) {
+							dataLabelOptions.align = up ? 'right' : 'left';
+						}
+						dataLabelOptions.x = dataLabelOptions.xHigh;								
+					} else {
+						dataLabelOptions.y = dataLabelOptions.yHigh;
+					}
+				}
+			}
+			
+			if (seriesProto.drawDataLabels) {
+				seriesProto.drawDataLabels.apply(this, arguments); // #1209
+			}
+			
+			// Step 2: reorganize and handle data labels for the lower values
+			i = length;
+			while (i--) {
+				point = data[i];
+				if (point) {
+					up = point.plotHigh > point.plotLow;
+					
+					// Move the generated labels from step 1, and reassign the original data labels
+					point.dataLabelUpper = point.dataLabel;
+					point.dataLabel = originalDataLabels[i];
+					
+					// Reset values
+					point.y = point.low;
+					point.plotY = point._plotY;
+					
+					// Set the default offset
+					point.below = !up;
+					if (inverted) {
+						if (!align) {
+							dataLabelOptions.align = up ? 'left' : 'right';
+						}
+						dataLabelOptions.x = dataLabelOptions.xLow;
+					} else {
+						dataLabelOptions.y = dataLabelOptions.yLow;
+					}
+				}
+			}
+			if (seriesProto.drawDataLabels) {
+				seriesProto.drawDataLabels.apply(this, arguments);
+			}
+		}
+
+		dataLabelOptions.align = align;
+	
+	},
+	
+	alignDataLabel: function () {
+		seriesTypes.column.prototype.alignDataLabel.apply(this, arguments);
+	},
+	
+	setStackedPoints: noop,
+	
+	getSymbol: noop,
+	
+	drawPoints: noop
+});/**
+ * The AreaSplineRangeSeries class
+ */
+
+defaultPlotOptions.areasplinerange = merge(defaultPlotOptions.arearange);
+
+/**
+ * AreaSplineRangeSeries object
+ */
+seriesTypes.areasplinerange = extendClass(seriesTypes.arearange, {
+	type: 'areasplinerange',
+	getPointSpline: seriesTypes.spline.prototype.getPointSpline
+});
+
+(function () {
+	
+	var colProto = seriesTypes.column.prototype;
+
+	/**
+	 * The ColumnRangeSeries class
+	 */
+	defaultPlotOptions.columnrange = merge(defaultPlotOptions.column, defaultPlotOptions.arearange, {
+		lineWidth: 1,
+		pointRange: null
+	});
+
+	/**
+	 * ColumnRangeSeries object
+	 */
+	seriesTypes.columnrange = extendClass(seriesTypes.arearange, {
+		type: 'columnrange',
+		/**
+		 * Translate data points from raw values x and y to plotX and plotY
+		 */
+		translate: function () {
+			var series = this,
+				yAxis = series.yAxis,
+				plotHigh;
+
+			colProto.translate.apply(series);
+
+			// Set plotLow and plotHigh
+			each(series.points, function (point) {
+				var shapeArgs = point.shapeArgs,
+					minPointLength = series.options.minPointLength,
+					heightDifference,
+					height,
+					y;
+
+				point.tooltipPos = null; // don't inherit from column
+				point.plotHigh = plotHigh = yAxis.translate(point.high, 0, 1, 0, 1);
+				point.plotLow = point.plotY;
+
+				// adjust shape
+				y = plotHigh;
+				height = point.plotY - plotHigh;
+
+				// Adjust for minPointLength
+				if (Math.abs(height) < minPointLength) {
+					heightDifference = (minPointLength - height);
+					height += heightDifference;
+					y -= heightDifference / 2;
+
+				// Adjust for negative ranges or reversed Y axis (#1457)
+				} else if (height < 0) {
+					height *= -1;
+					y -= height;
+				}
+
+				shapeArgs.height = height;
+				shapeArgs.y = y;
+			});
+		},
+		directTouch: true,
+		trackerGroups: ['group', 'dataLabelsGroup'],
+		drawGraph: noop,
+		pointAttrToOptions: colProto.pointAttrToOptions,
+		drawPoints: colProto.drawPoints,
+		drawTracker: colProto.drawTracker,
+		animate: colProto.animate,
+		getColumnMetrics: colProto.getColumnMetrics
+	});
+}());
+
+/* 
+ * The GaugeSeries class
+ */
+
+
+
+/**
+ * Extend the default options
+ */
+defaultPlotOptions.gauge = merge(defaultPlotOptions.line, {
+	dataLabels: {
+		enabled: true,
+		defer: false,
+		y: 15,
+		borderWidth: 1,
+		borderColor: 'silver',
+		borderRadius: 3,
+		crop: false,
+		verticalAlign: 'top',
+		zIndex: 2
+	},
+	dial: {
+		// radius: '80%',
+		// backgroundColor: 'black',
+		// borderColor: 'silver',
+		// borderWidth: 0,
+		// baseWidth: 3,
+		// topWidth: 1,
+		// baseLength: '70%' // of radius
+		// rearLength: '10%'
+	},
+	pivot: {
+		//radius: 5,
+		//borderWidth: 0
+		//borderColor: 'silver',
+		//backgroundColor: 'black'
+	},
+	tooltip: {
+		headerFormat: ''
+	},
+	showInLegend: false
+});
+
+/**
+ * Extend the point object
+ */
+var GaugePoint = extendClass(Point, {
+	/**
+	 * Don't do any hover colors or anything
+	 */
+	setState: function (state) {
+		this.state = state;
+	}
+});
+
+
+/**
+ * Add the series type
+ */
+var GaugeSeries = {
+	type: 'gauge',
+	pointClass: GaugePoint,
+	
+	// chart.angular will be set to true when a gauge series is present, and this will
+	// be used on the axes
+	angular: true, 
+	drawGraph: noop,
+	fixedBox: true,
+	forceDL: true,
+	trackerGroups: ['group', 'dataLabelsGroup'],
+	
+	/**
+	 * Calculate paths etc
+	 */
+	translate: function () {
+		
+		var series = this,
+			yAxis = series.yAxis,
+			options = series.options,
+			center = yAxis.center;
+			
+		series.generatePoints();
+		
+		each(series.points, function (point) {
+			
+			var dialOptions = merge(options.dial, point.dial),
+				radius = (pInt(pick(dialOptions.radius, 80)) * center[2]) / 200,
+				baseLength = (pInt(pick(dialOptions.baseLength, 70)) * radius) / 100,
+				rearLength = (pInt(pick(dialOptions.rearLength, 10)) * radius) / 100,
+				baseWidth = dialOptions.baseWidth || 3,
+				topWidth = dialOptions.topWidth || 1,
+				overshoot = options.overshoot,
+				rotation = yAxis.startAngleRad + yAxis.translate(point.y, null, null, null, true);
+
+			// Handle the wrap and overshoot options
+			if (overshoot && typeof overshoot === 'number') {
+				overshoot = overshoot / 180 * Math.PI;
+				rotation = Math.max(yAxis.startAngleRad - overshoot, Math.min(yAxis.endAngleRad + overshoot, rotation));			
+			
+			} else if (options.wrap === false) {
+				rotation = Math.max(yAxis.startAngleRad, Math.min(yAxis.endAngleRad, rotation));
+			}
+
+			rotation = rotation * 180 / Math.PI;
+				
+			point.shapeType = 'path';
+			point.shapeArgs = {
+				d: dialOptions.path || [
+					'M', 
+					-rearLength, -baseWidth / 2, 
+					'L', 
+					baseLength, -baseWidth / 2,
+					radius, -topWidth / 2,
+					radius, topWidth / 2,
+					baseLength, baseWidth / 2,
+					-rearLength, baseWidth / 2,
+					'z'
+				],
+				translateX: center[0],
+				translateY: center[1],
+				rotation: rotation
+			};
+			
+			// Positions for data label
+			point.plotX = center[0];
+			point.plotY = center[1];
+		});
+	},
+	
+	/**
+	 * Draw the points where each point is one needle
+	 */
+	drawPoints: function () {
+		
+		var series = this,
+			center = series.yAxis.center,
+			pivot = series.pivot,
+			options = series.options,
+			pivotOptions = options.pivot,
+			renderer = series.chart.renderer;
+		
+		each(series.points, function (point) {
+			
+			var graphic = point.graphic,
+				shapeArgs = point.shapeArgs,
+				d = shapeArgs.d,
+				dialOptions = merge(options.dial, point.dial); // #1233
+			
+			if (graphic) {
+				graphic.animate(shapeArgs);
+				shapeArgs.d = d; // animate alters it
+			} else {
+				point.graphic = renderer[point.shapeType](shapeArgs)
+					.attr({
+						stroke: dialOptions.borderColor || 'none',
+						'stroke-width': dialOptions.borderWidth || 0,
+						fill: dialOptions.backgroundColor || 'black',
+						rotation: shapeArgs.rotation // required by VML when animation is false
+					})
+					.add(series.group);
+			}
+		});
+		
+		// Add or move the pivot
+		if (pivot) {
+			pivot.animate({ // #1235
+				translateX: center[0],
+				translateY: center[1]
+			});
+		} else {
+			series.pivot = renderer.circle(0, 0, pick(pivotOptions.radius, 5))
+				.attr({
+					'stroke-width': pivotOptions.borderWidth || 0,
+					stroke: pivotOptions.borderColor || 'silver',
+					fill: pivotOptions.backgroundColor || 'black'
+				})
+				.translate(center[0], center[1])
+				.add(series.group);
+		}
+	},
+	
+	/**
+	 * Animate the arrow up from startAngle
+	 */
+	animate: function (init) {
+		var series = this;
+
+		if (!init) {
+			each(series.points, function (point) {
+				var graphic = point.graphic;
+
+				if (graphic) {
+					// start value
+					graphic.attr({
+						rotation: series.yAxis.startAngleRad * 180 / Math.PI
+					});
+
+					// animate
+					graphic.animate({
+						rotation: point.shapeArgs.rotation
+					}, series.options.animation);
+				}
+			});
+
+			// delete this function to allow it only once
+			series.animate = null;
+		}
+	},
+	
+	render: function () {
+		this.group = this.plotGroup(
+			'group', 
+			'series', 
+			this.visible ? 'visible' : 'hidden', 
+			this.options.zIndex, 
+			this.chart.seriesGroup
+		);
+		Series.prototype.render.call(this);
+		this.group.clip(this.chart.clipRect);
+	},
+	
+	/**
+	 * Extend the basic setData method by running processData and generatePoints immediately,
+	 * in order to access the points from the legend.
+	 */
+	setData: function (data, redraw) {
+		Series.prototype.setData.call(this, data, false);
+		this.processData();
+		this.generatePoints();
+		if (pick(redraw, true)) {
+			this.chart.redraw();
+		}
+	},
+
+	/**
+	 * If the tracking module is loaded, add the point tracker
+	 */
+	drawTracker: TrackerMixin && TrackerMixin.drawTrackerPoint
+};
+seriesTypes.gauge = extendClass(seriesTypes.line, GaugeSeries);
+
+/* ****************************************************************************
+ * Start Box plot series code											      *
+ *****************************************************************************/
+
+// Set default options
+defaultPlotOptions.boxplot = merge(defaultPlotOptions.column, {
+	fillColor: '#FFFFFF',
+	lineWidth: 1,
+	//medianColor: null,
+	medianWidth: 2,
+	states: {
+		hover: {
+			brightness: -0.3
+		}
+	},
+	//stemColor: null,
+	//stemDashStyle: 'solid'
+	//stemWidth: null,
+	threshold: null,
+	tooltip: {
+		pointFormat: '<span style="color:{point.color}">\u25CF</span> <b> {series.name}</b><br/>' + // docs
+			'Maximum: {point.high}<br/>' +
+			'Upper quartile: {point.q3}<br/>' +
+			'Median: {point.median}<br/>' +
+			'Lower quartile: {point.q1}<br/>' +
+			'Minimum: {point.low}<br/>'
+			
+	},
+	//whiskerColor: null,
+	whiskerLength: '50%',
+	whiskerWidth: 2
+});
+
+// Create the series object
+seriesTypes.boxplot = extendClass(seriesTypes.column, {
+	type: 'boxplot',
+	pointArrayMap: ['low', 'q1', 'median', 'q3', 'high'], // array point configs are mapped to this
+	toYData: function (point) { // return a plain array for speedy calculation
+		return [point.low, point.q1, point.median, point.q3, point.high];
+	},
+	pointValKey: 'high', // defines the top of the tracker
+	
+	/**
+	 * One-to-one mapping from options to SVG attributes
+	 */
+	pointAttrToOptions: { // mapping between SVG attributes and the corresponding options
+		fill: 'fillColor',
+		stroke: 'color',
+		'stroke-width': 'lineWidth'
+	},
+	
+	/**
+	 * Disable data labels for box plot
+	 */
+	drawDataLabels: noop,
+
+	/**
+	 * Translate data points from raw values x and y to plotX and plotY
+	 */
+	translate: function () {
+		var series = this,
+			yAxis = series.yAxis,
+			pointArrayMap = series.pointArrayMap;
+
+		seriesTypes.column.prototype.translate.apply(series);
+
+		// do the translation on each point dimension
+		each(series.points, function (point) {
+			each(pointArrayMap, function (key) {
+				if (point[key] !== null) {
+					point[key + 'Plot'] = yAxis.translate(point[key], 0, 1, 0, 1);
+				}
+			});
+		});
+	},
+
+	/**
+	 * Draw the data points
+	 */
+	drawPoints: function () {
+		var series = this,  //state = series.state,
+			points = series.points,
+			options = series.options,
+			chart = series.chart,
+			renderer = chart.renderer,
+			pointAttr,
+			q1Plot,
+			q3Plot,
+			highPlot,
+			lowPlot,
+			medianPlot,
+			crispCorr,
+			crispX,
+			graphic,
+			stemPath,
+			stemAttr,
+			boxPath,
+			whiskersPath,
+			whiskersAttr,
+			medianPath,
+			medianAttr,
+			width,
+			left,
+			right,
+			halfWidth,
+			shapeArgs,
+			color,
+			doQuartiles = series.doQuartiles !== false, // error bar inherits this series type but doesn't do quartiles
+			whiskerLength = parseInt(series.options.whiskerLength, 10) / 100;
+
+
+		each(points, function (point) {
+
+			graphic = point.graphic;
+			shapeArgs = point.shapeArgs; // the box
+			stemAttr = {};
+			whiskersAttr = {};
+			medianAttr = {};
+			color = point.color || series.color;
+			
+			if (point.plotY !== UNDEFINED) {
+
+				pointAttr = point.pointAttr[point.selected ? 'selected' : ''];
+
+				// crisp vector coordinates
+				width = shapeArgs.width;
+				left = mathFloor(shapeArgs.x);
+				right = left + width;
+				halfWidth = mathRound(width / 2);
+				//crispX = mathRound(left + halfWidth) + crispCorr;
+				q1Plot = mathFloor(doQuartiles ? point.q1Plot : point.lowPlot);// + crispCorr;
+				q3Plot = mathFloor(doQuartiles ? point.q3Plot : point.lowPlot);// + crispCorr;
+				highPlot = mathFloor(point.highPlot);// + crispCorr;
+				lowPlot = mathFloor(point.lowPlot);// + crispCorr;
+				
+				// Stem attributes
+				stemAttr.stroke = point.stemColor || options.stemColor || color;
+				stemAttr['stroke-width'] = pick(point.stemWidth, options.stemWidth, options.lineWidth);
+				stemAttr.dashstyle = point.stemDashStyle || options.stemDashStyle;
+				
+				// Whiskers attributes
+				whiskersAttr.stroke = point.whiskerColor || options.whiskerColor || color;
+				whiskersAttr['stroke-width'] = pick(point.whiskerWidth, options.whiskerWidth, options.lineWidth);
+				
+				// Median attributes
+				medianAttr.stroke = point.medianColor || options.medianColor || color;
+				medianAttr['stroke-width'] = pick(point.medianWidth, options.medianWidth, options.lineWidth);
+				
+				// The stem
+				crispCorr = (stemAttr['stroke-width'] % 2) / 2;
+				crispX = left + halfWidth + crispCorr;				
+				stemPath = [
+					// stem up
+					'M',
+					crispX, q3Plot,
+					'L',
+					crispX, highPlot,
+					
+					// stem down
+					'M',
+					crispX, q1Plot,
+					'L',
+					crispX, lowPlot
+				];
+				
+				// The box
+				if (doQuartiles) {
+					crispCorr = (pointAttr['stroke-width'] % 2) / 2;
+					crispX = mathFloor(crispX) + crispCorr;
+					q1Plot = mathFloor(q1Plot) + crispCorr;
+					q3Plot = mathFloor(q3Plot) + crispCorr;
+					left += crispCorr;
+					right += crispCorr;
+					boxPath = [
+						'M',
+						left, q3Plot,
+						'L',
+						left, q1Plot,
+						'L',
+						right, q1Plot,
+						'L',
+						right, q3Plot,
+						'L',
+						left, q3Plot,
+						'z'
+					];
+				}
+				
+				// The whiskers
+				if (whiskerLength) {
+					crispCorr = (whiskersAttr['stroke-width'] % 2) / 2;
+					highPlot = highPlot + crispCorr;
+					lowPlot = lowPlot + crispCorr;
+					whiskersPath = [
+						// High whisker
+						'M',
+						crispX - halfWidth * whiskerLength, 
+						highPlot,
+						'L',
+						crispX + halfWidth * whiskerLength, 
+						highPlot,
+						
+						// Low whisker
+						'M',
+						crispX - halfWidth * whiskerLength, 
+						lowPlot,
+						'L',
+						crispX + halfWidth * whiskerLength, 
+						lowPlot
+					];
+				}
+				
+				// The median
+				crispCorr = (medianAttr['stroke-width'] % 2) / 2;				
+				medianPlot = mathRound(point.medianPlot) + crispCorr;
+				medianPath = [
+					'M',
+					left, 
+					medianPlot,
+					'L',
+					right, 
+					medianPlot
+				];
+				
+				// Create or update the graphics
+				if (graphic) { // update
+					
+					point.stem.animate({ d: stemPath });
+					if (whiskerLength) {
+						point.whiskers.animate({ d: whiskersPath });
+					}
+					if (doQuartiles) {
+						point.box.animate({ d: boxPath });
+					}
+					point.medianShape.animate({ d: medianPath });
+					
+				} else { // create new
+					point.graphic = graphic = renderer.g()
+						.add(series.group);
+					
+					point.stem = renderer.path(stemPath)
+						.attr(stemAttr)
+						.add(graphic);
+						
+					if (whiskerLength) {
+						point.whiskers = renderer.path(whiskersPath) 
+							.attr(whiskersAttr)
+							.add(graphic);
+					}
+					if (doQuartiles) {
+						point.box = renderer.path(boxPath)
+							.attr(pointAttr)
+							.add(graphic);
+					}	
+					point.medianShape = renderer.path(medianPath)
+						.attr(medianAttr)
+						.add(graphic);
+				}
+			}
+		});
+
+	},
+	setStackedPoints: noop // #3890
+
+
+});
+
+/* ****************************************************************************
+ * End Box plot series code												*
+ *****************************************************************************/
+/* ****************************************************************************
+ * Start error bar series code                                                *
+ *****************************************************************************/
+
+// 1 - set default options
+defaultPlotOptions.errorbar = merge(defaultPlotOptions.boxplot, {
+	color: '#000000',
+	grouping: false,
+	linkedTo: ':previous',
+	tooltip: {
+		pointFormat: '<span style="color:{point.color}">\u25CF</span> {series.name}: <b>{point.low}</b> - <b>{point.high}</b><br/>' // docs
+	},
+	whiskerWidth: null
+});
+
+// 2 - Create the series object
+seriesTypes.errorbar = extendClass(seriesTypes.boxplot, {
+	type: 'errorbar',
+	pointArrayMap: ['low', 'high'], // array point configs are mapped to this
+	toYData: function (point) { // return a plain array for speedy calculation
+		return [point.low, point.high];
+	},
+	pointValKey: 'high', // defines the top of the tracker
+	doQuartiles: false,
+	drawDataLabels: seriesTypes.arearange ? seriesTypes.arearange.prototype.drawDataLabels : noop,
+
+	/**
+	 * Get the width and X offset, either on top of the linked series column
+	 * or standalone
+	 */
+	getColumnMetrics: function () {
+		return (this.linkedParent && this.linkedParent.columnMetrics) || 
+			seriesTypes.column.prototype.getColumnMetrics.call(this);
+	}
+});
+
+/* ****************************************************************************
+ * End error bar series code                                                  *
+ *****************************************************************************/
+/* ****************************************************************************
+ * Start Waterfall series code                                                *
+ *****************************************************************************/
+
+// 1 - set default options
+defaultPlotOptions.waterfall = merge(defaultPlotOptions.column, {
+	lineWidth: 1,
+	lineColor: '#333',
+	dashStyle: 'dot',
+	borderColor: '#333',
+	dataLabels: {
+		inside: true
+	},
+	states: {
+		hover: {
+			lineWidthPlus: 0 // #3126
+		}
+	}
+});
+
+
+// 2 - Create the series object
+seriesTypes.waterfall = extendClass(seriesTypes.column, {
+	type: 'waterfall',
+
+	upColorProp: 'fill',
+
+	pointValKey: 'y',
+
+	/**
+	 * Translate data points from raw values
+	 */
+	translate: function () {
+		var series = this,
+			options = series.options,
+			yAxis = series.yAxis,
+			len,
+			i,
+			points,
+			point,
+			shapeArgs,
+			stack,
+			y,
+			yValue,
+			previousY,
+			previousIntermediate,
+			range,
+			threshold = options.threshold,
+			stacking = options.stacking,
+			tooltipY;
+
+		// run column series translate
+		seriesTypes.column.prototype.translate.apply(this);
+
+		previousY = previousIntermediate = threshold;
+		points = series.points;
+
+		for (i = 0, len = points.length; i < len; i++) {
+			// cache current point object
+			point = points[i];
+			yValue = this.processedYData[i];
+			shapeArgs = point.shapeArgs;
+
+			// get current stack
+			stack = stacking && yAxis.stacks[(series.negStacks && yValue < threshold ? '-' : '') + series.stackKey];
+			range = stack ? 
+				stack[point.x].points[series.index + ',' + i] :
+				[0, yValue];
+
+			// override point value for sums
+			// #3710 Update point does not propagate to sum
+			if (point.isSum) {
+				point.y = yValue;
+			} else if (point.isIntermediateSum) {
+				point.y = yValue - previousIntermediate; // #3840
+			}
+			// up points
+			y = mathMax(previousY, previousY + point.y) + range[0];
+			shapeArgs.y = yAxis.translate(y, 0, 1);
+
+
+			// sum points
+			if (point.isSum) {
+				shapeArgs.y = yAxis.translate(range[1], 0, 1);
+				shapeArgs.height = Math.min(yAxis.translate(range[0], 0, 1), yAxis.len) - shapeArgs.y; // #4256
+
+			} else if (point.isIntermediateSum) {
+				shapeArgs.y = yAxis.translate(range[1], 0, 1);
+				shapeArgs.height = Math.min(yAxis.translate(previousIntermediate, 0, 1), yAxis.len) - shapeArgs.y;
+				previousIntermediate = range[1];
+
+			// If it's not the sum point, update previous stack end position and get 
+			// shape height (#3886)
+			} else {
+				if (previousY !== 0) { // Not the first point
+					shapeArgs.height = yValue > 0 ? 
+						yAxis.translate(previousY, 0, 1) - shapeArgs.y :
+						yAxis.translate(previousY, 0, 1) - yAxis.translate(previousY - yValue, 0, 1);
+				}
+				previousY += yValue;
+			}
+			// #3952 Negative sum or intermediate sum not rendered correctly
+			if (shapeArgs.height < 0) {
+				shapeArgs.y += shapeArgs.height;
+				shapeArgs.height *= -1;
+			}
+
+			point.plotY = shapeArgs.y = mathRound(shapeArgs.y) - (series.borderWidth % 2) / 2;
+			shapeArgs.height = mathMax(mathRound(shapeArgs.height), 0.001); // #3151
+			point.yBottom = shapeArgs.y + shapeArgs.height;
+
+			// Correct tooltip placement (#3014)
+			tooltipY = point.plotY + (point.negative ? shapeArgs.height : 0);
+			if (series.chart.inverted) {
+				point.tooltipPos[0] = yAxis.len - tooltipY;
+			} else {
+				point.tooltipPos[1] = tooltipY;
+			}
+
+		}
+	},
+
+	/**
+	 * Call default processData then override yData to reflect waterfall's extremes on yAxis
+	 */
+	processData: function (force) {
+		var series = this,
+			options = series.options,
+			yData = series.yData,
+			points = series.options.data, // #3710 Update point does not propagate to sum
+			point,
+			dataLength = yData.length,
+			threshold = options.threshold || 0,
+			subSum,
+			sum,
+			dataMin,
+			dataMax,
+			y,
+			i;
+
+		sum = subSum = dataMin = dataMax = threshold;
+
+		for (i = 0; i < dataLength; i++) {
+			y = yData[i];
+			point = points && points[i] ? points[i] : {};
+
+			if (y === "sum" || point.isSum) {
+				yData[i] = sum;
+			} else if (y === "intermediateSum" || point.isIntermediateSum) {
+				yData[i] = subSum;
+			} else {
+				sum += y;
+				subSum += y;
+			}
+			dataMin = Math.min(sum, dataMin);
+			dataMax = Math.max(sum, dataMax);
+		}
+
+		Series.prototype.processData.call(this, force);
+
+		// Record extremes
+		series.dataMin = dataMin;
+		series.dataMax = dataMax;
+	},
+
+	/**
+	 * Return y value or string if point is sum
+	 */
+	toYData: function (pt) {
+		if (pt.isSum) {
+			return (pt.x === 0 ? null : "sum"); //#3245 Error when first element is Sum or Intermediate Sum
+		} else if (pt.isIntermediateSum) {
+			return (pt.x === 0 ? null : "intermediateSum"); //#3245
+		}
+		return pt.y;
+	},
+
+	/**
+	 * Postprocess mapping between options and SVG attributes
+	 */
+	getAttribs: function () {
+		seriesTypes.column.prototype.getAttribs.apply(this, arguments);
+
+		var series = this,
+			options = series.options,
+			stateOptions = options.states,
+			upColor = options.upColor || series.color,
+			hoverColor = Highcharts.Color(upColor).brighten(0.1).get(),
+			seriesDownPointAttr = merge(series.pointAttr),
+			upColorProp = series.upColorProp;
+
+		seriesDownPointAttr[''][upColorProp] = upColor;
+		seriesDownPointAttr.hover[upColorProp] = stateOptions.hover.upColor || hoverColor;
+		seriesDownPointAttr.select[upColorProp] = stateOptions.select.upColor || upColor;
+
+		each(series.points, function (point) {
+			if (!point.options.color) {
+				// Up color
+				if (point.y > 0) {
+					point.pointAttr = seriesDownPointAttr;
+					point.color = upColor;
+
+				// Down color (#3710, update to negative)
+				} else {
+					point.pointAttr = series.pointAttr;
+				}
+			}
+		});
+	},
+
+	/**
+	 * Draw columns' connector lines
+	 */
+	getGraphPath: function () {
+
+		var data = this.data,
+			length = data.length,
+			lineWidth = this.options.lineWidth + this.borderWidth,
+			normalizer = mathRound(lineWidth) % 2 / 2,
+			path = [],
+			M = 'M',
+			L = 'L',
+			prevArgs,
+			pointArgs,
+			i,
+			d;
+
+		for (i = 1; i < length; i++) {
+			pointArgs = data[i].shapeArgs;
+			prevArgs = data[i - 1].shapeArgs;
+
+			d = [
+				M,
+				prevArgs.x + prevArgs.width, prevArgs.y + normalizer,
+				L,
+				pointArgs.x, prevArgs.y + normalizer
+			];
+
+			if (data[i - 1].y < 0) {
+				d[2] += prevArgs.height;
+				d[5] += prevArgs.height;
+			}
+
+			path = path.concat(d);
+		}
+
+		return path;
+	},
+
+	/**
+	 * Extremes are recorded in processData
+	 */
+	getExtremes: noop,
+
+	drawGraph: Series.prototype.drawGraph
+});
+
+/* ****************************************************************************
+ * End Waterfall series code                                                  *
+ *****************************************************************************/
+/**
+ * Set the default options for polygon
+ */
+defaultPlotOptions.polygon = merge(defaultPlotOptions.scatter, {
+	marker: {
+		enabled: false
+	}
+});
+
+/**
+ * The polygon series class
+ */
+seriesTypes.polygon = extendClass(seriesTypes.scatter, {
+	type: 'polygon',
+	fillGraph: true,
+	// Close all segments
+	getSegmentPath: function (segment) {
+		return Series.prototype.getSegmentPath.call(this, segment).concat('z');
+	},
+	drawGraph: Series.prototype.drawGraph,
+	drawLegendSymbol: Highcharts.LegendSymbolMixin.drawRectangle
+});
+/* ****************************************************************************
+ * Start Bubble series code											          *
+ *****************************************************************************/
+
+// 1 - set default options
+defaultPlotOptions.bubble = merge(defaultPlotOptions.scatter, {
+	dataLabels: {
+		formatter: function () { // #2945
+			return this.point.z;
+		},
+		inside: true,
+		verticalAlign: 'middle'
+	},
+	// displayNegative: true,
+	marker: {
+		// fillOpacity: 0.5,
+		lineColor: null, // inherit from series.color
+		lineWidth: 1
+	},
+	minSize: 8,
+	maxSize: '20%',
+	// negativeColor: null,
+	// sizeBy: 'area'
+	states: {
+		hover: {
+			halo: {
+				size: 5
+			}
+		}
+	},
+	tooltip: {
+		pointFormat: '({point.x}, {point.y}), Size: {point.z}'
+	},
+	turboThreshold: 0,
+	zThreshold: 0,
+	zoneAxis: 'z'
+});
+
+var BubblePoint = extendClass(Point, {
+	haloPath: function () {
+		return Point.prototype.haloPath.call(this, this.shapeArgs.r + this.series.options.states.hover.halo.size);
+	},
+	ttBelow: false
+});
+
+// 2 - Create the series object
+seriesTypes.bubble = extendClass(seriesTypes.scatter, {
+	type: 'bubble',
+	pointClass: BubblePoint,
+	pointArrayMap: ['y', 'z'],
+	parallelArrays: ['x', 'y', 'z'],
+	trackerGroups: ['group', 'dataLabelsGroup'],
+	bubblePadding: true,
+	zoneAxis: 'z',
+	
+	/**
+	 * Mapping between SVG attributes and the corresponding options
+	 */
+	pointAttrToOptions: { 
+		stroke: 'lineColor',
+		'stroke-width': 'lineWidth',
+		fill: 'fillColor'
+	},
+	
+	/**
+	 * Apply the fillOpacity to all fill positions
+	 */
+	applyOpacity: function (fill) {
+		var markerOptions = this.options.marker,
+			fillOpacity = pick(markerOptions.fillOpacity, 0.5);
+		
+		// When called from Legend.colorizeItem, the fill isn't predefined
+		fill = fill || markerOptions.fillColor || this.color; 
+		
+		if (fillOpacity !== 1) {
+			fill = Color(fill).setOpacity(fillOpacity).get('rgba');
+		}
+		return fill;
+	},
+	
+	/**
+	 * Extend the convertAttribs method by applying opacity to the fill
+	 */
+	convertAttribs: function () {
+		var obj = Series.prototype.convertAttribs.apply(this, arguments);
+		
+		obj.fill = this.applyOpacity(obj.fill);
+		
+		return obj;
+	},
+
+	/**
+	 * Get the radius for each point based on the minSize, maxSize and each point's Z value. This
+	 * must be done prior to Series.translate because the axis needs to add padding in 
+	 * accordance with the point sizes.
+	 */
+	getRadii: function (zMin, zMax, minSize, maxSize) {
+		var len,
+			i,
+			pos,
+			zData = this.zData,
+			radii = [],
+			sizeByArea = this.options.sizeBy !== 'width',
+			zRange = zMax - zMin;
+
+		// Set the shape type and arguments to be picked up in drawPoints
+		for (i = 0, len = zData.length; i < len; i++) {
+			// Issue #4419 - if value is less than zMin, push a radius that's always smaller than the minimum size
+			if (zData[i] < zMin) {
+				radii.push(minSize / 2 - 1);
+			} else {
+				// Relative size, a number between 0 and 1
+				pos = zRange > 0 ? (zData[i] - zMin) / zRange : 0.5; 
+				
+				if (sizeByArea && pos >= 0) {
+					pos = Math.sqrt(pos);
+				}
+		
+				radii.push(math.ceil(minSize + pos * (maxSize - minSize)) / 2);
+			}
+		}
+		this.radii = radii;
+	},
+	
+	/**
+	 * Perform animation on the bubbles
+	 */
+	animate: function (init) {
+		var animation = this.options.animation;
+		
+		if (!init) { // run the animation
+			each(this.points, function (point) {
+				var graphic = point.graphic,
+					shapeArgs = point.shapeArgs;
+
+				if (graphic && shapeArgs) {
+					// start values
+					graphic.attr('r', 1);
+
+					// animate
+					graphic.animate({
+						r: shapeArgs.r
+					}, animation);
+				}
+			});
+
+			// delete this function to allow it only once
+			this.animate = null;
+		}
+	},
+	
+	/**
+	 * Extend the base translate method to handle bubble size
+	 */
+	translate: function () {
+		
+		var i,
+			data = this.data,
+			point,
+			radius,
+			radii = this.radii;
+		
+		// Run the parent method
+		seriesTypes.scatter.prototype.translate.call(this);
+		
+		// Set the shape type and arguments to be picked up in drawPoints
+		i = data.length;
+		
+		while (i--) {
+			point = data[i];
+			radius = radii ? radii[i] : 0; // #1737
+			
+			if (radius >= this.minPxSize / 2) {
+				// Shape arguments
+				point.shapeType = 'circle';
+				point.shapeArgs = {
+					x: point.plotX,
+					y: point.plotY,
+					r: radius
+				};
+				
+				// Alignment box for the data label
+				point.dlBox = {
+					x: point.plotX - radius,
+					y: point.plotY - radius,
+					width: 2 * radius,
+					height: 2 * radius
+				};
+			} else { // below zThreshold
+				point.shapeArgs = point.plotY = point.dlBox = UNDEFINED; // #1691
+			}
+		}
+	},
+	
+	/**
+	 * Get the series' symbol in the legend
+	 * 
+	 * @param {Object} legend The legend object
+	 * @param {Object} item The series (this) or point
+	 */
+	drawLegendSymbol: function (legend, item) {
+		var radius = pInt(legend.itemStyle.fontSize) / 2;
+		
+		item.legendSymbol = this.chart.renderer.circle(
+			radius,
+			legend.baseline - radius,
+			radius
+		).attr({
+			zIndex: 3
+		}).add(item.legendGroup);
+		item.legendSymbol.isMarker = true;	
+		
+	},
+		
+	drawPoints: seriesTypes.column.prototype.drawPoints,
+	alignDataLabel: seriesTypes.column.prototype.alignDataLabel,
+	buildKDTree: noop,
+	applyZones: noop
+});
+
+/**
+ * Add logic to pad each axis with the amount of pixels
+ * necessary to avoid the bubbles to overflow.
+ */
+Axis.prototype.beforePadding = function () {
+	var axis = this,
+		axisLength = this.len,
+		chart = this.chart,
+		pxMin = 0, 
+		pxMax = axisLength,
+		isXAxis = this.isXAxis,
+		dataKey = isXAxis ? 'xData' : 'yData',
+		min = this.min,
+		extremes = {},
+		smallestSize = math.min(chart.plotWidth, chart.plotHeight),
+		zMin = Number.MAX_VALUE,
+		zMax = -Number.MAX_VALUE,
+		range = this.max - min,
+		transA = axisLength / range,
+		activeSeries = [];
+
+	// Handle padding on the second pass, or on redraw
+	each(this.series, function (series) {
+
+		var seriesOptions = series.options,
+			zData;
+
+		if (series.bubblePadding && (series.visible || !chart.options.chart.ignoreHiddenSeries)) {
+
+			// Correction for #1673
+			axis.allowZoomOutside = true;
+
+			// Cache it
+			activeSeries.push(series);
+
+			if (isXAxis) { // because X axis is evaluated first
+			
+				// For each series, translate the size extremes to pixel values
+				each(['minSize', 'maxSize'], function (prop) {
+					var length = seriesOptions[prop],
+						isPercent = /%$/.test(length);
+					
+					length = pInt(length);
+					extremes[prop] = isPercent ?
+						smallestSize * length / 100 :
+						length;
+					
+				});
+				series.minPxSize = extremes.minSize;
+				series.maxPxSize = extremes.maxSize;
+				
+				// Find the min and max Z
+				zData = series.zData;
+				if (zData.length) { // #1735
+					zMin = pick(seriesOptions.zMin, math.min(
+						zMin,
+						math.max(
+							arrayMin(zData), 
+							seriesOptions.displayNegative === false ? seriesOptions.zThreshold : -Number.MAX_VALUE
+						)
+					));
+					zMax = pick(seriesOptions.zMax, math.max(zMax, arrayMax(zData)));
+				}
+			}
+		}
+	});
+
+	each(activeSeries, function (series) {
+
+		var data = series[dataKey],
+			i = data.length,
+			radius;
+
+		if (isXAxis) {
+			series.getRadii(zMin, zMax, series.minPxSize, series.maxPxSize);
+		}
+		
+		if (range > 0) {
+			while (i--) {
+				if (typeof data[i] === 'number') {
+					radius = series.radii[i];
+					pxMin = Math.min(((data[i] - min) * transA) - radius, pxMin);
+					pxMax = Math.max(((data[i] - min) * transA) + radius, pxMax);
+				}
+			}
+		}
+	});
+	
+
+	if (activeSeries.length && range > 0 && !this.isLog) {
+		pxMax -= axisLength;
+		transA *= (axisLength + pxMin - pxMax) / axisLength;
+		each([['min', 'userMin', pxMin], ['max', 'userMax', pxMax]], function (keys) {
+			if (pick(axis.options[keys[0]], axis[keys[1]]) === UNDEFINED) {
+				axis[keys[0]] += keys[2] / transA; 
+			}
+		});
+	}
+};
+
+/* ****************************************************************************
+ * End Bubble series code                                                     *
+ *****************************************************************************/
+
+(function () {
+
+	/**
+	 * Extensions for polar charts. Additionally, much of the geometry required for polar charts is
+	 * gathered in RadialAxes.js.
+	 * 
+	 */
+
+	var seriesProto = Series.prototype,
+		pointerProto = Pointer.prototype,
+		colProto;
+
+	/**
+	 * Search a k-d tree by the point angle, used for shared tooltips in polar charts
+	 */
+	seriesProto.searchPointByAngle = function (e) {
+		var series = this,
+			chart = series.chart,
+			xAxis = series.xAxis,
+			center = xAxis.pane.center,
+			plotX = e.chartX - center[0] - chart.plotLeft,
+			plotY = e.chartY - center[1] - chart.plotTop;
+
+		return this.searchKDTree({
+			clientX: 180 + (Math.atan2(plotX, plotY) * (-180 / Math.PI))
+		});
+
+	};
+	
+	/**
+	 * Wrap the buildKDTree function so that it searches by angle (clientX) in case of shared tooltip,
+	 * and by two dimensional distance in case of non-shared.
+	 */
+	wrap(seriesProto, 'buildKDTree', function (proceed) {
+		if (this.chart.polar) {
+			if (this.kdByAngle) {
+				this.searchPoint = this.searchPointByAngle;
+			} else {
+				this.kdDimensions = 2;
+			}
+		}
+		proceed.apply(this);
+	});
+
+	/**
+	 * Translate a point's plotX and plotY from the internal angle and radius measures to 
+	 * true plotX, plotY coordinates
+	 */
+	seriesProto.toXY = function (point) {
+		var xy,
+			chart = this.chart,
+			plotX = point.plotX,
+			plotY = point.plotY,
+			clientX;
+	
+		// Save rectangular plotX, plotY for later computation
+		point.rectPlotX = plotX;
+		point.rectPlotY = plotY;
+	
+		// Find the polar plotX and plotY
+		xy = this.xAxis.postTranslate(point.plotX, this.yAxis.len - plotY);
+		point.plotX = point.polarPlotX = xy.x - chart.plotLeft;
+		point.plotY = point.polarPlotY = xy.y - chart.plotTop;
+
+		// If shared tooltip, record the angle in degrees in order to align X points. Otherwise,
+		// use a standard k-d tree to get the nearest point in two dimensions.
+		if (this.kdByAngle) {
+			clientX = ((plotX / Math.PI * 180) + this.xAxis.pane.options.startAngle) % 360;
+			if (clientX < 0) { // #2665
+				clientX += 360;
+			}
+			point.clientX = clientX;
+		} else {
+			point.clientX = point.plotX;
+		}
+	};
+
+	/**
+	 * Add some special init logic to areas and areasplines
+	 */
+	function initArea(proceed, chart, options) {
+		proceed.call(this, chart, options);
+		if (this.chart.polar) {
+		
+			/**
+			 * Overridden method to close a segment path. While in a cartesian plane the area 
+			 * goes down to the threshold, in the polar chart it goes to the center.
+			 */
+			this.closeSegment = function (path) {
+				var center = this.xAxis.center;
+				path.push(
+					'L',
+					center[0],
+					center[1]
+				);			
+			};
+		
+			// Instead of complicated logic to draw an area around the inner area in a stack,
+			// just draw it behind
+			this.closedStacks = true;
+		}
+	}
+
+ 
+	if (seriesTypes.area) {		
+		wrap(seriesTypes.area.prototype, 'init', initArea);	
+	}
+	if (seriesTypes.areaspline) {		
+		wrap(seriesTypes.areaspline.prototype, 'init', initArea);			
+	}	
+
+	if (seriesTypes.spline) {
+		/**
+		 * Overridden method for calculating a spline from one point to the next
+		 */
+		wrap(seriesTypes.spline.prototype, 'getPointSpline', function (proceed, segment, point, i) {
+	
+			var ret,
+				smoothing = 1.5, // 1 means control points midway between points, 2 means 1/3 from the point, 3 is 1/4 etc;
+				denom = smoothing + 1,
+				plotX, 
+				plotY,
+				lastPoint,
+				nextPoint,
+				lastX,
+				lastY,
+				nextX,
+				nextY,
+				leftContX,
+				leftContY,
+				rightContX,
+				rightContY,
+				distanceLeftControlPoint,
+				distanceRightControlPoint,
+				leftContAngle,
+				rightContAngle,
+				jointAngle;
+		
+		
+			if (this.chart.polar) {
+		
+				plotX = point.plotX;
+				plotY = point.plotY;
+				lastPoint = segment[i - 1];
+				nextPoint = segment[i + 1];
+			
+				// Connect ends
+				if (this.connectEnds) {
+					if (!lastPoint) {
+						lastPoint = segment[segment.length - 2]; // not the last but the second last, because the segment is already connected
+					}
+					if (!nextPoint) {
+						nextPoint = segment[1];
+					}	
+				}
+
+				// find control points
+				if (lastPoint && nextPoint) {
+		
+					lastX = lastPoint.plotX;
+					lastY = lastPoint.plotY;
+					nextX = nextPoint.plotX;
+					nextY = nextPoint.plotY;
+					leftContX = (smoothing * plotX + lastX) / denom;
+					leftContY = (smoothing * plotY + lastY) / denom;
+					rightContX = (smoothing * plotX + nextX) / denom;
+					rightContY = (smoothing * plotY + nextY) / denom;
+					distanceLeftControlPoint = Math.sqrt(Math.pow(leftContX - plotX, 2) + Math.pow(leftContY - plotY, 2));
+					distanceRightControlPoint = Math.sqrt(Math.pow(rightContX - plotX, 2) + Math.pow(rightContY - plotY, 2));
+					leftContAngle = Math.atan2(leftContY - plotY, leftContX - plotX);
+					rightContAngle = Math.atan2(rightContY - plotY, rightContX - plotX);
+					jointAngle = (Math.PI / 2) + ((leftContAngle + rightContAngle) / 2);
+				
+				
+					// Ensure the right direction, jointAngle should be in the same quadrant as leftContAngle
+					if (Math.abs(leftContAngle - jointAngle) > Math.PI / 2) {
+						jointAngle -= Math.PI;
+					}
+			
+					// Find the corrected control points for a spline straight through the point
+					leftContX = plotX + Math.cos(jointAngle) * distanceLeftControlPoint;
+					leftContY = plotY + Math.sin(jointAngle) * distanceLeftControlPoint;
+					rightContX = plotX + Math.cos(Math.PI + jointAngle) * distanceRightControlPoint;
+					rightContY = plotY + Math.sin(Math.PI + jointAngle) * distanceRightControlPoint;
+			
+					// Record for drawing in next point
+					point.rightContX = rightContX;
+					point.rightContY = rightContY;
+
+				}
+		
+		
+				// moveTo or lineTo
+				if (!i) {
+					ret = ['M', plotX, plotY];
+				} else { // curve from last point to this
+					ret = [
+						'C',
+						lastPoint.rightContX || lastPoint.plotX,
+						lastPoint.rightContY || lastPoint.plotY,
+						leftContX || plotX,
+						leftContY || plotY,
+						plotX,
+						plotY
+					];
+					lastPoint.rightContX = lastPoint.rightContY = null; // reset for updating series later
+				}
+		
+		
+			} else {
+				ret = proceed.call(this, segment, point, i);
+			}
+			return ret;
+		});
+	}
+
+	/**
+	 * Extend translate. The plotX and plotY values are computed as if the polar chart were a
+	 * cartesian plane, where plotX denotes the angle in radians and (yAxis.len - plotY) is the pixel distance from
+	 * center. 
+	 */
+	wrap(seriesProto, 'translate', function (proceed) {
+		var chart = this.chart,
+			points,
+			i;
+
+		// Run uber method
+		proceed.call(this);
+	
+		// Postprocess plot coordinates
+		if (chart.polar) {
+			this.kdByAngle = chart.tooltip && chart.tooltip.shared;
+	
+			if (!this.preventPostTranslate) {
+				points = this.points;
+				i = points.length;
+
+				while (i--) {
+					// Translate plotX, plotY from angle and radius to true plot coordinates
+					this.toXY(points[i]);
+				}
+			}
+		}
+	});
+
+	/** 
+	 * Extend getSegmentPath to allow connecting ends across 0 to provide a closed circle in 
+	 * line-like series.
+	 */
+	wrap(seriesProto, 'getSegmentPath', function (proceed, segment) {
+		
+		var points = this.points;
+	
+		// Connect the path
+		if (this.chart.polar && this.options.connectEnds !== false && 
+				segment[segment.length - 1] === points[points.length - 1] && points[0].y !== null) {
+			this.connectEnds = true; // re-used in splines
+			segment = [].concat(segment, [points[0]]);
+		}
+	
+		// Run uber method
+		return proceed.call(this, segment);
+	
+	});
+
+
+	function polarAnimate(proceed, init) {
+		var chart = this.chart,
+			animation = this.options.animation,
+			group = this.group,
+			markerGroup = this.markerGroup,
+			center = this.xAxis.center,
+			plotLeft = chart.plotLeft,
+			plotTop = chart.plotTop,
+			attribs;
+
+		// Specific animation for polar charts
+		if (chart.polar) {
+		
+			// Enable animation on polar charts only in SVG. In VML, the scaling is different, plus animation
+			// would be so slow it would't matter.
+			if (chart.renderer.isSVG) {
+
+				if (animation === true) {
+					animation = {};
+				}
+	
+				// Initialize the animation
+				if (init) {
+				
+					// Scale down the group and place it in the center
+					attribs = {
+						translateX: center[0] + plotLeft,
+						translateY: center[1] + plotTop,
+						scaleX: 0.001, // #1499
+						scaleY: 0.001
+					};
+					
+					group.attr(attribs);
+					if (markerGroup) {
+						//markerGroup.attrSetters = group.attrSetters;
+						markerGroup.attr(attribs);
+					}
+				
+				// Run the animation
+				} else {
+					attribs = {
+						translateX: plotLeft,
+						translateY: plotTop,
+						scaleX: 1,
+						scaleY: 1
+					};
+					group.animate(attribs, animation);
+					if (markerGroup) {
+						markerGroup.animate(attribs, animation);
+					}
+				
+					// Delete this function to allow it only once
+					this.animate = null;
+				}
+			}
+	
+		// For non-polar charts, revert to the basic animation
+		} else {
+			proceed.call(this, init);
+		} 
+	}
+
+	// Define the animate method for regular series
+	wrap(seriesProto, 'animate', polarAnimate);
+
+
+	if (seriesTypes.column) {
+
+		colProto = seriesTypes.column.prototype;
+		/**
+		* Define the animate method for columnseries
+		*/
+		wrap(colProto, 'animate', polarAnimate);
+
+
+		/**
+		 * Extend the column prototype's translate method
+		 */
+		wrap(colProto, 'translate', function (proceed) {
+		
+			var xAxis = this.xAxis,
+				len = this.yAxis.len,
+				center = xAxis.center,
+				startAngleRad = xAxis.startAngleRad,
+				renderer = this.chart.renderer,
+				start,
+				points,
+				point,
+				i;
+	
+			this.preventPostTranslate = true;
+	
+			// Run uber method
+			proceed.call(this);
+	
+			// Postprocess plot coordinates
+			if (xAxis.isRadial) {
+				points = this.points;
+				i = points.length;
+				while (i--) {
+					point = points[i];
+					start = point.barX + startAngleRad;
+					point.shapeType = 'path';
+					point.shapeArgs = {
+						d: renderer.symbols.arc(
+							center[0],
+							center[1],
+							len - point.plotY,
+							null, 
+							{
+								start: start,
+								end: start + point.pointWidth,
+								innerR: len - pick(point.yBottom, len)
+							}
+						)
+					};
+					// Provide correct plotX, plotY for tooltip
+					this.toXY(point); 
+					point.tooltipPos = [point.plotX, point.plotY];
+					point.ttBelow = point.plotY > center[1];
+				}
+			}
+		});
+
+
+		/**
+		 * Align column data labels outside the columns. #1199.
+		 */
+		wrap(colProto, 'alignDataLabel', function (proceed, point, dataLabel, options, alignTo, isNew) {
+	
+			if (this.chart.polar) {
+				var angle = point.rectPlotX / Math.PI * 180,
+					align,
+					verticalAlign;
+		
+				// Align nicely outside the perimeter of the columns
+				if (options.align === null) {
+					if (angle > 20 && angle < 160) {
+						align = 'left'; // right hemisphere
+					} else if (angle > 200 && angle < 340) {
+						align = 'right'; // left hemisphere
+					} else {
+						align = 'center'; // top or bottom
+					}
+					options.align = align;
+				}
+				if (options.verticalAlign === null) {
+					if (angle < 45 || angle > 315) {
+						verticalAlign = 'bottom'; // top part
+					} else if (angle > 135 && angle < 225) {
+						verticalAlign = 'top'; // bottom part
+					} else {
+						verticalAlign = 'middle'; // left or right
+					}
+					options.verticalAlign = verticalAlign;
+				}
+		
+				seriesProto.alignDataLabel.call(this, point, dataLabel, options, alignTo, isNew);
+			} else {
+				proceed.call(this, point, dataLabel, options, alignTo, isNew);
+			}
+	
+		});		
+	}
+
+	/**
+	 * Extend getCoordinates to prepare for polar axis values
+	 */
+	wrap(pointerProto, 'getCoordinates', function (proceed, e) {
+		var chart = this.chart,
+			ret = {
+				xAxis: [],
+				yAxis: []
+			};
+	
+		if (chart.polar) {	
+
+			each(chart.axes, function (axis) {
+				var isXAxis = axis.isXAxis,
+					center = axis.center,
+					x = e.chartX - center[0] - chart.plotLeft,
+					y = e.chartY - center[1] - chart.plotTop;
+			
+				ret[isXAxis ? 'xAxis' : 'yAxis'].push({
+					axis: axis,
+					value: axis.translate(
+						isXAxis ?
+							Math.PI - Math.atan2(x, y) : // angle 
+							Math.sqrt(Math.pow(x, 2) + Math.pow(y, 2)), // distance from center
+						true
+					)
+				});
+			});
+		
+		} else {
+			ret = proceed.call(this, e);
+		}
+	
+		return ret;
+	});
+
+}());
+
+}(Highcharts));
+
+},{}],2:[function(require,module,exports){
 // shim for using process in browser
 
 var process = module.exports = {};
@@ -90,7 +2718,7 @@ process.chdir = function (dir) {
 };
 process.umask = function() { return 0; };
 
-},{}],2:[function(require,module,exports){
+},{}],3:[function(require,module,exports){
 /*
  Highstock JS v2.0.1 (2014-04-24)
 
@@ -558,10 +3186,10 @@ d.destroy();for(a=0;a<b.exportDivElements.length;a++)d=b.exportDivElements[a],B(
 function(){return this.dataMax!==void 0&&this.dataMin!==void 0};e.showNoData=function(a){var b=this.options,a=a||b.lang.noData,b=b.noData;if(!this.noDataLabel)this.noDataLabel=this.renderer.label(a,0,0,null,null,null,null,null,"no-data").attr(b.attr).css(b.style).add(),this.noDataLabel.align(i(this.noDataLabel.getBBox(),b.position),!1,"plotBox")};e.hideNoData=function(){if(this.noDataLabel)this.noDataLabel=this.noDataLabel.destroy()};e.hasData=function(){for(var a=this.series,b=a.length;b--;)if(a[b].hasData()&&
 !a[b].options.isInternal)return!0;return!1};e.callbacks.push(function(a){c.addEvent(a,"load",g);c.addEvent(a,"redraw",g)})})(Highcharts);
 
-},{}],3:[function(require,module,exports){
+},{}],4:[function(require,module,exports){
 module.exports = require('./lib/ReactWithAddons');
 
-},{"./lib/ReactWithAddons":103}],4:[function(require,module,exports){
+},{"./lib/ReactWithAddons":104}],5:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -588,7 +3216,7 @@ var AutoFocusMixin = {
 
 module.exports = AutoFocusMixin;
 
-},{"./focusNode":137}],5:[function(require,module,exports){
+},{"./focusNode":138}],6:[function(require,module,exports){
 /**
  * Copyright 2013-2015 Facebook, Inc.
  * All rights reserved.
@@ -1083,7 +3711,7 @@ var BeforeInputEventPlugin = {
 
 module.exports = BeforeInputEventPlugin;
 
-},{"./EventConstants":18,"./EventPropagators":23,"./ExecutionEnvironment":24,"./FallbackCompositionState":25,"./SyntheticCompositionEvent":109,"./SyntheticInputEvent":113,"./keyOf":160}],6:[function(require,module,exports){
+},{"./EventConstants":19,"./EventPropagators":24,"./ExecutionEnvironment":25,"./FallbackCompositionState":26,"./SyntheticCompositionEvent":110,"./SyntheticInputEvent":114,"./keyOf":161}],7:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -1195,7 +3823,7 @@ var CSSCore = {
 module.exports = CSSCore;
 
 }).call(this,require('_process'))
-},{"./invariant":153,"_process":1}],7:[function(require,module,exports){
+},{"./invariant":154,"_process":2}],8:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -1320,7 +3948,7 @@ var CSSProperty = {
 
 module.exports = CSSProperty;
 
-},{}],8:[function(require,module,exports){
+},{}],9:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -1502,7 +4130,7 @@ var CSSPropertyOperations = {
 module.exports = CSSPropertyOperations;
 
 }).call(this,require('_process'))
-},{"./CSSProperty":7,"./ExecutionEnvironment":24,"./camelizeStyleName":124,"./dangerousStyleValue":131,"./hyphenateStyleName":151,"./memoizeStringOnly":162,"./warning":174,"_process":1}],9:[function(require,module,exports){
+},{"./CSSProperty":8,"./ExecutionEnvironment":25,"./camelizeStyleName":125,"./dangerousStyleValue":132,"./hyphenateStyleName":152,"./memoizeStringOnly":163,"./warning":175,"_process":2}],10:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -1602,7 +4230,7 @@ PooledClass.addPoolingTo(CallbackQueue);
 module.exports = CallbackQueue;
 
 }).call(this,require('_process'))
-},{"./Object.assign":31,"./PooledClass":32,"./invariant":153,"_process":1}],10:[function(require,module,exports){
+},{"./Object.assign":32,"./PooledClass":33,"./invariant":154,"_process":2}],11:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -1984,7 +4612,7 @@ var ChangeEventPlugin = {
 
 module.exports = ChangeEventPlugin;
 
-},{"./EventConstants":18,"./EventPluginHub":20,"./EventPropagators":23,"./ExecutionEnvironment":24,"./ReactUpdates":102,"./SyntheticEvent":111,"./isEventSupported":154,"./isTextInputElement":156,"./keyOf":160}],11:[function(require,module,exports){
+},{"./EventConstants":19,"./EventPluginHub":21,"./EventPropagators":24,"./ExecutionEnvironment":25,"./ReactUpdates":103,"./SyntheticEvent":112,"./isEventSupported":155,"./isTextInputElement":157,"./keyOf":161}],12:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -2009,7 +4637,7 @@ var ClientReactRootIndex = {
 
 module.exports = ClientReactRootIndex;
 
-},{}],12:[function(require,module,exports){
+},{}],13:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -2147,7 +4775,7 @@ var DOMChildrenOperations = {
 module.exports = DOMChildrenOperations;
 
 }).call(this,require('_process'))
-},{"./Danger":15,"./ReactMultiChildUpdateTypes":81,"./invariant":153,"./setTextContent":168,"_process":1}],13:[function(require,module,exports){
+},{"./Danger":16,"./ReactMultiChildUpdateTypes":82,"./invariant":154,"./setTextContent":169,"_process":2}],14:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -2446,7 +5074,7 @@ var DOMProperty = {
 module.exports = DOMProperty;
 
 }).call(this,require('_process'))
-},{"./invariant":153,"_process":1}],14:[function(require,module,exports){
+},{"./invariant":154,"_process":2}],15:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -2638,7 +5266,7 @@ var DOMPropertyOperations = {
 module.exports = DOMPropertyOperations;
 
 }).call(this,require('_process'))
-},{"./DOMProperty":13,"./quoteAttributeValueForBrowser":166,"./warning":174,"_process":1}],15:[function(require,module,exports){
+},{"./DOMProperty":14,"./quoteAttributeValueForBrowser":167,"./warning":175,"_process":2}],16:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -2825,7 +5453,7 @@ var Danger = {
 module.exports = Danger;
 
 }).call(this,require('_process'))
-},{"./ExecutionEnvironment":24,"./createNodesFromMarkup":129,"./emptyFunction":132,"./getMarkupWrap":145,"./invariant":153,"_process":1}],16:[function(require,module,exports){
+},{"./ExecutionEnvironment":25,"./createNodesFromMarkup":130,"./emptyFunction":133,"./getMarkupWrap":146,"./invariant":154,"_process":2}],17:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -2864,7 +5492,7 @@ var DefaultEventPluginOrder = [
 
 module.exports = DefaultEventPluginOrder;
 
-},{"./keyOf":160}],17:[function(require,module,exports){
+},{"./keyOf":161}],18:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -3004,7 +5632,7 @@ var EnterLeaveEventPlugin = {
 
 module.exports = EnterLeaveEventPlugin;
 
-},{"./EventConstants":18,"./EventPropagators":23,"./ReactMount":79,"./SyntheticMouseEvent":115,"./keyOf":160}],18:[function(require,module,exports){
+},{"./EventConstants":19,"./EventPropagators":24,"./ReactMount":80,"./SyntheticMouseEvent":116,"./keyOf":161}],19:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -3076,7 +5704,7 @@ var EventConstants = {
 
 module.exports = EventConstants;
 
-},{"./keyMirror":159}],19:[function(require,module,exports){
+},{"./keyMirror":160}],20:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -3166,7 +5794,7 @@ var EventListener = {
 module.exports = EventListener;
 
 }).call(this,require('_process'))
-},{"./emptyFunction":132,"_process":1}],20:[function(require,module,exports){
+},{"./emptyFunction":133,"_process":2}],21:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -3444,7 +6072,7 @@ var EventPluginHub = {
 module.exports = EventPluginHub;
 
 }).call(this,require('_process'))
-},{"./EventPluginRegistry":21,"./EventPluginUtils":22,"./accumulateInto":121,"./forEachAccumulated":138,"./invariant":153,"_process":1}],21:[function(require,module,exports){
+},{"./EventPluginRegistry":22,"./EventPluginUtils":23,"./accumulateInto":122,"./forEachAccumulated":139,"./invariant":154,"_process":2}],22:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -3724,7 +6352,7 @@ var EventPluginRegistry = {
 module.exports = EventPluginRegistry;
 
 }).call(this,require('_process'))
-},{"./invariant":153,"_process":1}],22:[function(require,module,exports){
+},{"./invariant":154,"_process":2}],23:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -3945,7 +6573,7 @@ var EventPluginUtils = {
 module.exports = EventPluginUtils;
 
 }).call(this,require('_process'))
-},{"./EventConstants":18,"./invariant":153,"_process":1}],23:[function(require,module,exports){
+},{"./EventConstants":19,"./invariant":154,"_process":2}],24:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -4087,7 +6715,7 @@ var EventPropagators = {
 module.exports = EventPropagators;
 
 }).call(this,require('_process'))
-},{"./EventConstants":18,"./EventPluginHub":20,"./accumulateInto":121,"./forEachAccumulated":138,"_process":1}],24:[function(require,module,exports){
+},{"./EventConstants":19,"./EventPluginHub":21,"./accumulateInto":122,"./forEachAccumulated":139,"_process":2}],25:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -4131,7 +6759,7 @@ var ExecutionEnvironment = {
 
 module.exports = ExecutionEnvironment;
 
-},{}],25:[function(require,module,exports){
+},{}],26:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -4222,7 +6850,7 @@ PooledClass.addPoolingTo(FallbackCompositionState);
 
 module.exports = FallbackCompositionState;
 
-},{"./Object.assign":31,"./PooledClass":32,"./getTextContentAccessor":148}],26:[function(require,module,exports){
+},{"./Object.assign":32,"./PooledClass":33,"./getTextContentAccessor":149}],27:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -4433,7 +7061,7 @@ var HTMLDOMPropertyConfig = {
 
 module.exports = HTMLDOMPropertyConfig;
 
-},{"./DOMProperty":13,"./ExecutionEnvironment":24}],27:[function(require,module,exports){
+},{"./DOMProperty":14,"./ExecutionEnvironment":25}],28:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -4474,7 +7102,7 @@ var LinkedStateMixin = {
 
 module.exports = LinkedStateMixin;
 
-},{"./ReactLink":77,"./ReactStateSetters":96}],28:[function(require,module,exports){
+},{"./ReactLink":78,"./ReactStateSetters":97}],29:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -4630,7 +7258,7 @@ var LinkedValueUtils = {
 module.exports = LinkedValueUtils;
 
 }).call(this,require('_process'))
-},{"./ReactPropTypes":88,"./invariant":153,"_process":1}],29:[function(require,module,exports){
+},{"./ReactPropTypes":89,"./invariant":154,"_process":2}],30:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
@@ -4687,7 +7315,7 @@ var LocalEventTrapMixin = {
 module.exports = LocalEventTrapMixin;
 
 }).call(this,require('_process'))
-},{"./ReactBrowserEventEmitter":35,"./accumulateInto":121,"./forEachAccumulated":138,"./invariant":153,"_process":1}],30:[function(require,module,exports){
+},{"./ReactBrowserEventEmitter":36,"./accumulateInto":122,"./forEachAccumulated":139,"./invariant":154,"_process":2}],31:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -4745,7 +7373,7 @@ var MobileSafariClickEventPlugin = {
 
 module.exports = MobileSafariClickEventPlugin;
 
-},{"./EventConstants":18,"./emptyFunction":132}],31:[function(require,module,exports){
+},{"./EventConstants":19,"./emptyFunction":133}],32:[function(require,module,exports){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -4794,7 +7422,7 @@ function assign(target, sources) {
 
 module.exports = assign;
 
-},{}],32:[function(require,module,exports){
+},{}],33:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -4910,7 +7538,7 @@ var PooledClass = {
 module.exports = PooledClass;
 
 }).call(this,require('_process'))
-},{"./invariant":153,"_process":1}],33:[function(require,module,exports){
+},{"./invariant":154,"_process":2}],34:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -5062,7 +7690,7 @@ React.version = '0.13.3';
 module.exports = React;
 
 }).call(this,require('_process'))
-},{"./EventPluginUtils":22,"./ExecutionEnvironment":24,"./Object.assign":31,"./ReactChildren":39,"./ReactClass":40,"./ReactComponent":41,"./ReactContext":46,"./ReactCurrentOwner":47,"./ReactDOM":48,"./ReactDOMTextComponent":59,"./ReactDefaultInjection":62,"./ReactElement":65,"./ReactElementValidator":66,"./ReactInstanceHandles":74,"./ReactMount":79,"./ReactPerf":84,"./ReactPropTypes":88,"./ReactReconciler":91,"./ReactServerRendering":94,"./findDOMNode":135,"./onlyChild":163,"_process":1}],34:[function(require,module,exports){
+},{"./EventPluginUtils":23,"./ExecutionEnvironment":25,"./Object.assign":32,"./ReactChildren":40,"./ReactClass":41,"./ReactComponent":42,"./ReactContext":47,"./ReactCurrentOwner":48,"./ReactDOM":49,"./ReactDOMTextComponent":60,"./ReactDefaultInjection":63,"./ReactElement":66,"./ReactElementValidator":67,"./ReactInstanceHandles":75,"./ReactMount":80,"./ReactPerf":85,"./ReactPropTypes":89,"./ReactReconciler":92,"./ReactServerRendering":95,"./findDOMNode":136,"./onlyChild":164,"_process":2}],35:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -5093,7 +7721,7 @@ var ReactBrowserComponentMixin = {
 
 module.exports = ReactBrowserComponentMixin;
 
-},{"./findDOMNode":135}],35:[function(require,module,exports){
+},{"./findDOMNode":136}],36:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -5446,7 +8074,7 @@ var ReactBrowserEventEmitter = assign({}, ReactEventEmitterMixin, {
 
 module.exports = ReactBrowserEventEmitter;
 
-},{"./EventConstants":18,"./EventPluginHub":20,"./EventPluginRegistry":21,"./Object.assign":31,"./ReactEventEmitterMixin":69,"./ViewportMetrics":120,"./isEventSupported":154}],36:[function(require,module,exports){
+},{"./EventConstants":19,"./EventPluginHub":21,"./EventPluginRegistry":22,"./Object.assign":32,"./ReactEventEmitterMixin":70,"./ViewportMetrics":121,"./isEventSupported":155}],37:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -5516,7 +8144,7 @@ var ReactCSSTransitionGroup = React.createClass({
 
 module.exports = ReactCSSTransitionGroup;
 
-},{"./Object.assign":31,"./React":33,"./ReactCSSTransitionGroupChild":37,"./ReactTransitionGroup":100}],37:[function(require,module,exports){
+},{"./Object.assign":32,"./React":34,"./ReactCSSTransitionGroupChild":38,"./ReactTransitionGroup":101}],38:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -5664,7 +8292,7 @@ var ReactCSSTransitionGroupChild = React.createClass({
 module.exports = ReactCSSTransitionGroupChild;
 
 }).call(this,require('_process'))
-},{"./CSSCore":6,"./React":33,"./ReactTransitionEvents":99,"./onlyChild":163,"./warning":174,"_process":1}],38:[function(require,module,exports){
+},{"./CSSCore":7,"./React":34,"./ReactTransitionEvents":100,"./onlyChild":164,"./warning":175,"_process":2}],39:[function(require,module,exports){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -5791,7 +8419,7 @@ var ReactChildReconciler = {
 
 module.exports = ReactChildReconciler;
 
-},{"./ReactReconciler":91,"./flattenChildren":136,"./instantiateReactComponent":152,"./shouldUpdateReactComponent":170}],39:[function(require,module,exports){
+},{"./ReactReconciler":92,"./flattenChildren":137,"./instantiateReactComponent":153,"./shouldUpdateReactComponent":171}],40:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -5944,7 +8572,7 @@ var ReactChildren = {
 module.exports = ReactChildren;
 
 }).call(this,require('_process'))
-},{"./PooledClass":32,"./ReactFragment":71,"./traverseAllChildren":172,"./warning":174,"_process":1}],40:[function(require,module,exports){
+},{"./PooledClass":33,"./ReactFragment":72,"./traverseAllChildren":173,"./warning":175,"_process":2}],41:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -6890,7 +9518,7 @@ var ReactClass = {
 module.exports = ReactClass;
 
 }).call(this,require('_process'))
-},{"./Object.assign":31,"./ReactComponent":41,"./ReactCurrentOwner":47,"./ReactElement":65,"./ReactErrorUtils":68,"./ReactInstanceMap":75,"./ReactLifeCycle":76,"./ReactPropTypeLocationNames":86,"./ReactPropTypeLocations":87,"./ReactUpdateQueue":101,"./invariant":153,"./keyMirror":159,"./keyOf":160,"./warning":174,"_process":1}],41:[function(require,module,exports){
+},{"./Object.assign":32,"./ReactComponent":42,"./ReactCurrentOwner":48,"./ReactElement":66,"./ReactErrorUtils":69,"./ReactInstanceMap":76,"./ReactLifeCycle":77,"./ReactPropTypeLocationNames":87,"./ReactPropTypeLocations":88,"./ReactUpdateQueue":102,"./invariant":154,"./keyMirror":160,"./keyOf":161,"./warning":175,"_process":2}],42:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -7044,7 +9672,7 @@ if ("production" !== process.env.NODE_ENV) {
 module.exports = ReactComponent;
 
 }).call(this,require('_process'))
-},{"./ReactUpdateQueue":101,"./invariant":153,"./warning":174,"_process":1}],42:[function(require,module,exports){
+},{"./ReactUpdateQueue":102,"./invariant":154,"./warning":175,"_process":2}],43:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -7091,7 +9719,7 @@ var ReactComponentBrowserEnvironment = {
 
 module.exports = ReactComponentBrowserEnvironment;
 
-},{"./ReactDOMIDOperations":52,"./ReactMount":79}],43:[function(require,module,exports){
+},{"./ReactDOMIDOperations":53,"./ReactMount":80}],44:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
@@ -7152,7 +9780,7 @@ var ReactComponentEnvironment = {
 module.exports = ReactComponentEnvironment;
 
 }).call(this,require('_process'))
-},{"./invariant":153,"_process":1}],44:[function(require,module,exports){
+},{"./invariant":154,"_process":2}],45:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -7201,7 +9829,7 @@ var ReactComponentWithPureRenderMixin = {
 
 module.exports = ReactComponentWithPureRenderMixin;
 
-},{"./shallowEqual":169}],45:[function(require,module,exports){
+},{"./shallowEqual":170}],46:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -8114,7 +10742,7 @@ var ReactCompositeComponent = {
 module.exports = ReactCompositeComponent;
 
 }).call(this,require('_process'))
-},{"./Object.assign":31,"./ReactComponentEnvironment":43,"./ReactContext":46,"./ReactCurrentOwner":47,"./ReactElement":65,"./ReactElementValidator":66,"./ReactInstanceMap":75,"./ReactLifeCycle":76,"./ReactNativeComponent":82,"./ReactPerf":84,"./ReactPropTypeLocationNames":86,"./ReactPropTypeLocations":87,"./ReactReconciler":91,"./ReactUpdates":102,"./emptyObject":133,"./invariant":153,"./shouldUpdateReactComponent":170,"./warning":174,"_process":1}],46:[function(require,module,exports){
+},{"./Object.assign":32,"./ReactComponentEnvironment":44,"./ReactContext":47,"./ReactCurrentOwner":48,"./ReactElement":66,"./ReactElementValidator":67,"./ReactInstanceMap":76,"./ReactLifeCycle":77,"./ReactNativeComponent":83,"./ReactPerf":85,"./ReactPropTypeLocationNames":87,"./ReactPropTypeLocations":88,"./ReactReconciler":92,"./ReactUpdates":103,"./emptyObject":134,"./invariant":154,"./shouldUpdateReactComponent":171,"./warning":175,"_process":2}],47:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -8192,7 +10820,7 @@ var ReactContext = {
 module.exports = ReactContext;
 
 }).call(this,require('_process'))
-},{"./Object.assign":31,"./emptyObject":133,"./warning":174,"_process":1}],47:[function(require,module,exports){
+},{"./Object.assign":32,"./emptyObject":134,"./warning":175,"_process":2}],48:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -8226,7 +10854,7 @@ var ReactCurrentOwner = {
 
 module.exports = ReactCurrentOwner;
 
-},{}],48:[function(require,module,exports){
+},{}],49:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -8405,7 +11033,7 @@ var ReactDOM = mapObject({
 module.exports = ReactDOM;
 
 }).call(this,require('_process'))
-},{"./ReactElement":65,"./ReactElementValidator":66,"./mapObject":161,"_process":1}],49:[function(require,module,exports){
+},{"./ReactElement":66,"./ReactElementValidator":67,"./mapObject":162,"_process":2}],50:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -8469,7 +11097,7 @@ var ReactDOMButton = ReactClass.createClass({
 
 module.exports = ReactDOMButton;
 
-},{"./AutoFocusMixin":4,"./ReactBrowserComponentMixin":34,"./ReactClass":40,"./ReactElement":65,"./keyMirror":159}],50:[function(require,module,exports){
+},{"./AutoFocusMixin":5,"./ReactBrowserComponentMixin":35,"./ReactClass":41,"./ReactElement":66,"./keyMirror":160}],51:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -8979,7 +11607,7 @@ ReactDOMComponent.injection = {
 module.exports = ReactDOMComponent;
 
 }).call(this,require('_process'))
-},{"./CSSPropertyOperations":8,"./DOMProperty":13,"./DOMPropertyOperations":14,"./Object.assign":31,"./ReactBrowserEventEmitter":35,"./ReactComponentBrowserEnvironment":42,"./ReactMount":79,"./ReactMultiChild":80,"./ReactPerf":84,"./escapeTextContentForBrowser":134,"./invariant":153,"./isEventSupported":154,"./keyOf":160,"./warning":174,"_process":1}],51:[function(require,module,exports){
+},{"./CSSPropertyOperations":9,"./DOMProperty":14,"./DOMPropertyOperations":15,"./Object.assign":32,"./ReactBrowserEventEmitter":36,"./ReactComponentBrowserEnvironment":43,"./ReactMount":80,"./ReactMultiChild":81,"./ReactPerf":85,"./escapeTextContentForBrowser":135,"./invariant":154,"./isEventSupported":155,"./keyOf":161,"./warning":175,"_process":2}],52:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -9028,7 +11656,7 @@ var ReactDOMForm = ReactClass.createClass({
 
 module.exports = ReactDOMForm;
 
-},{"./EventConstants":18,"./LocalEventTrapMixin":29,"./ReactBrowserComponentMixin":34,"./ReactClass":40,"./ReactElement":65}],52:[function(require,module,exports){
+},{"./EventConstants":19,"./LocalEventTrapMixin":30,"./ReactBrowserComponentMixin":35,"./ReactClass":41,"./ReactElement":66}],53:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -9196,7 +11824,7 @@ ReactPerf.measureMethods(ReactDOMIDOperations, 'ReactDOMIDOperations', {
 module.exports = ReactDOMIDOperations;
 
 }).call(this,require('_process'))
-},{"./CSSPropertyOperations":8,"./DOMChildrenOperations":12,"./DOMPropertyOperations":14,"./ReactMount":79,"./ReactPerf":84,"./invariant":153,"./setInnerHTML":167,"_process":1}],53:[function(require,module,exports){
+},{"./CSSPropertyOperations":9,"./DOMChildrenOperations":13,"./DOMPropertyOperations":15,"./ReactMount":80,"./ReactPerf":85,"./invariant":154,"./setInnerHTML":168,"_process":2}],54:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -9241,7 +11869,7 @@ var ReactDOMIframe = ReactClass.createClass({
 
 module.exports = ReactDOMIframe;
 
-},{"./EventConstants":18,"./LocalEventTrapMixin":29,"./ReactBrowserComponentMixin":34,"./ReactClass":40,"./ReactElement":65}],54:[function(require,module,exports){
+},{"./EventConstants":19,"./LocalEventTrapMixin":30,"./ReactBrowserComponentMixin":35,"./ReactClass":41,"./ReactElement":66}],55:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -9287,7 +11915,7 @@ var ReactDOMImg = ReactClass.createClass({
 
 module.exports = ReactDOMImg;
 
-},{"./EventConstants":18,"./LocalEventTrapMixin":29,"./ReactBrowserComponentMixin":34,"./ReactClass":40,"./ReactElement":65}],55:[function(require,module,exports){
+},{"./EventConstants":19,"./LocalEventTrapMixin":30,"./ReactBrowserComponentMixin":35,"./ReactClass":41,"./ReactElement":66}],56:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -9464,7 +12092,7 @@ var ReactDOMInput = ReactClass.createClass({
 module.exports = ReactDOMInput;
 
 }).call(this,require('_process'))
-},{"./AutoFocusMixin":4,"./DOMPropertyOperations":14,"./LinkedValueUtils":28,"./Object.assign":31,"./ReactBrowserComponentMixin":34,"./ReactClass":40,"./ReactElement":65,"./ReactMount":79,"./ReactUpdates":102,"./invariant":153,"_process":1}],56:[function(require,module,exports){
+},{"./AutoFocusMixin":5,"./DOMPropertyOperations":15,"./LinkedValueUtils":29,"./Object.assign":32,"./ReactBrowserComponentMixin":35,"./ReactClass":41,"./ReactElement":66,"./ReactMount":80,"./ReactUpdates":103,"./invariant":154,"_process":2}],57:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -9516,7 +12144,7 @@ var ReactDOMOption = ReactClass.createClass({
 module.exports = ReactDOMOption;
 
 }).call(this,require('_process'))
-},{"./ReactBrowserComponentMixin":34,"./ReactClass":40,"./ReactElement":65,"./warning":174,"_process":1}],57:[function(require,module,exports){
+},{"./ReactBrowserComponentMixin":35,"./ReactClass":41,"./ReactElement":66,"./warning":175,"_process":2}],58:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -9694,7 +12322,7 @@ var ReactDOMSelect = ReactClass.createClass({
 
 module.exports = ReactDOMSelect;
 
-},{"./AutoFocusMixin":4,"./LinkedValueUtils":28,"./Object.assign":31,"./ReactBrowserComponentMixin":34,"./ReactClass":40,"./ReactElement":65,"./ReactUpdates":102}],58:[function(require,module,exports){
+},{"./AutoFocusMixin":5,"./LinkedValueUtils":29,"./Object.assign":32,"./ReactBrowserComponentMixin":35,"./ReactClass":41,"./ReactElement":66,"./ReactUpdates":103}],59:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -9907,7 +12535,7 @@ var ReactDOMSelection = {
 
 module.exports = ReactDOMSelection;
 
-},{"./ExecutionEnvironment":24,"./getNodeForCharacterOffset":146,"./getTextContentAccessor":148}],59:[function(require,module,exports){
+},{"./ExecutionEnvironment":25,"./getNodeForCharacterOffset":147,"./getTextContentAccessor":149}],60:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -10024,7 +12652,7 @@ assign(ReactDOMTextComponent.prototype, {
 
 module.exports = ReactDOMTextComponent;
 
-},{"./DOMPropertyOperations":14,"./Object.assign":31,"./ReactComponentBrowserEnvironment":42,"./ReactDOMComponent":50,"./escapeTextContentForBrowser":134}],60:[function(require,module,exports){
+},{"./DOMPropertyOperations":15,"./Object.assign":32,"./ReactComponentBrowserEnvironment":43,"./ReactDOMComponent":51,"./escapeTextContentForBrowser":135}],61:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -10164,7 +12792,7 @@ var ReactDOMTextarea = ReactClass.createClass({
 module.exports = ReactDOMTextarea;
 
 }).call(this,require('_process'))
-},{"./AutoFocusMixin":4,"./DOMPropertyOperations":14,"./LinkedValueUtils":28,"./Object.assign":31,"./ReactBrowserComponentMixin":34,"./ReactClass":40,"./ReactElement":65,"./ReactUpdates":102,"./invariant":153,"./warning":174,"_process":1}],61:[function(require,module,exports){
+},{"./AutoFocusMixin":5,"./DOMPropertyOperations":15,"./LinkedValueUtils":29,"./Object.assign":32,"./ReactBrowserComponentMixin":35,"./ReactClass":41,"./ReactElement":66,"./ReactUpdates":103,"./invariant":154,"./warning":175,"_process":2}],62:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -10237,7 +12865,7 @@ var ReactDefaultBatchingStrategy = {
 
 module.exports = ReactDefaultBatchingStrategy;
 
-},{"./Object.assign":31,"./ReactUpdates":102,"./Transaction":119,"./emptyFunction":132}],62:[function(require,module,exports){
+},{"./Object.assign":32,"./ReactUpdates":103,"./Transaction":120,"./emptyFunction":133}],63:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -10396,7 +13024,7 @@ module.exports = {
 };
 
 }).call(this,require('_process'))
-},{"./BeforeInputEventPlugin":5,"./ChangeEventPlugin":10,"./ClientReactRootIndex":11,"./DefaultEventPluginOrder":16,"./EnterLeaveEventPlugin":17,"./ExecutionEnvironment":24,"./HTMLDOMPropertyConfig":26,"./MobileSafariClickEventPlugin":30,"./ReactBrowserComponentMixin":34,"./ReactClass":40,"./ReactComponentBrowserEnvironment":42,"./ReactDOMButton":49,"./ReactDOMComponent":50,"./ReactDOMForm":51,"./ReactDOMIDOperations":52,"./ReactDOMIframe":53,"./ReactDOMImg":54,"./ReactDOMInput":55,"./ReactDOMOption":56,"./ReactDOMSelect":57,"./ReactDOMTextComponent":59,"./ReactDOMTextarea":60,"./ReactDefaultBatchingStrategy":61,"./ReactDefaultPerf":63,"./ReactElement":65,"./ReactEventListener":70,"./ReactInjection":72,"./ReactInstanceHandles":74,"./ReactMount":79,"./ReactReconcileTransaction":90,"./SVGDOMPropertyConfig":104,"./SelectEventPlugin":105,"./ServerReactRootIndex":106,"./SimpleEventPlugin":107,"./createFullPageComponent":128,"_process":1}],63:[function(require,module,exports){
+},{"./BeforeInputEventPlugin":6,"./ChangeEventPlugin":11,"./ClientReactRootIndex":12,"./DefaultEventPluginOrder":17,"./EnterLeaveEventPlugin":18,"./ExecutionEnvironment":25,"./HTMLDOMPropertyConfig":27,"./MobileSafariClickEventPlugin":31,"./ReactBrowserComponentMixin":35,"./ReactClass":41,"./ReactComponentBrowserEnvironment":43,"./ReactDOMButton":50,"./ReactDOMComponent":51,"./ReactDOMForm":52,"./ReactDOMIDOperations":53,"./ReactDOMIframe":54,"./ReactDOMImg":55,"./ReactDOMInput":56,"./ReactDOMOption":57,"./ReactDOMSelect":58,"./ReactDOMTextComponent":60,"./ReactDOMTextarea":61,"./ReactDefaultBatchingStrategy":62,"./ReactDefaultPerf":64,"./ReactElement":66,"./ReactEventListener":71,"./ReactInjection":73,"./ReactInstanceHandles":75,"./ReactMount":80,"./ReactReconcileTransaction":91,"./SVGDOMPropertyConfig":105,"./SelectEventPlugin":106,"./ServerReactRootIndex":107,"./SimpleEventPlugin":108,"./createFullPageComponent":129,"_process":2}],64:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -10662,7 +13290,7 @@ var ReactDefaultPerf = {
 
 module.exports = ReactDefaultPerf;
 
-},{"./DOMProperty":13,"./ReactDefaultPerfAnalysis":64,"./ReactMount":79,"./ReactPerf":84,"./performanceNow":165}],64:[function(require,module,exports){
+},{"./DOMProperty":14,"./ReactDefaultPerfAnalysis":65,"./ReactMount":80,"./ReactPerf":85,"./performanceNow":166}],65:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -10868,7 +13496,7 @@ var ReactDefaultPerfAnalysis = {
 
 module.exports = ReactDefaultPerfAnalysis;
 
-},{"./Object.assign":31}],65:[function(require,module,exports){
+},{"./Object.assign":32}],66:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
@@ -11176,7 +13804,7 @@ ReactElement.isValidElement = function(object) {
 module.exports = ReactElement;
 
 }).call(this,require('_process'))
-},{"./Object.assign":31,"./ReactContext":46,"./ReactCurrentOwner":47,"./warning":174,"_process":1}],66:[function(require,module,exports){
+},{"./Object.assign":32,"./ReactContext":47,"./ReactCurrentOwner":48,"./warning":175,"_process":2}],67:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
@@ -11641,7 +14269,7 @@ var ReactElementValidator = {
 module.exports = ReactElementValidator;
 
 }).call(this,require('_process'))
-},{"./ReactCurrentOwner":47,"./ReactElement":65,"./ReactFragment":71,"./ReactNativeComponent":82,"./ReactPropTypeLocationNames":86,"./ReactPropTypeLocations":87,"./getIteratorFn":144,"./invariant":153,"./warning":174,"_process":1}],67:[function(require,module,exports){
+},{"./ReactCurrentOwner":48,"./ReactElement":66,"./ReactFragment":72,"./ReactNativeComponent":83,"./ReactPropTypeLocationNames":87,"./ReactPropTypeLocations":88,"./getIteratorFn":145,"./invariant":154,"./warning":175,"_process":2}],68:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
@@ -11736,7 +14364,7 @@ var ReactEmptyComponent = {
 module.exports = ReactEmptyComponent;
 
 }).call(this,require('_process'))
-},{"./ReactElement":65,"./ReactInstanceMap":75,"./invariant":153,"_process":1}],68:[function(require,module,exports){
+},{"./ReactElement":66,"./ReactInstanceMap":76,"./invariant":154,"_process":2}],69:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -11768,7 +14396,7 @@ var ReactErrorUtils = {
 
 module.exports = ReactErrorUtils;
 
-},{}],69:[function(require,module,exports){
+},{}],70:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -11818,7 +14446,7 @@ var ReactEventEmitterMixin = {
 
 module.exports = ReactEventEmitterMixin;
 
-},{"./EventPluginHub":20}],70:[function(require,module,exports){
+},{"./EventPluginHub":21}],71:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -12001,7 +14629,7 @@ var ReactEventListener = {
 
 module.exports = ReactEventListener;
 
-},{"./EventListener":19,"./ExecutionEnvironment":24,"./Object.assign":31,"./PooledClass":32,"./ReactInstanceHandles":74,"./ReactMount":79,"./ReactUpdates":102,"./getEventTarget":143,"./getUnboundedScrollPosition":149}],71:[function(require,module,exports){
+},{"./EventListener":20,"./ExecutionEnvironment":25,"./Object.assign":32,"./PooledClass":33,"./ReactInstanceHandles":75,"./ReactMount":80,"./ReactUpdates":103,"./getEventTarget":144,"./getUnboundedScrollPosition":150}],72:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2015, Facebook, Inc.
@@ -12186,7 +14814,7 @@ var ReactFragment = {
 module.exports = ReactFragment;
 
 }).call(this,require('_process'))
-},{"./ReactElement":65,"./warning":174,"_process":1}],72:[function(require,module,exports){
+},{"./ReactElement":66,"./warning":175,"_process":2}],73:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -12228,7 +14856,7 @@ var ReactInjection = {
 
 module.exports = ReactInjection;
 
-},{"./DOMProperty":13,"./EventPluginHub":20,"./ReactBrowserEventEmitter":35,"./ReactClass":40,"./ReactComponentEnvironment":43,"./ReactDOMComponent":50,"./ReactEmptyComponent":67,"./ReactNativeComponent":82,"./ReactPerf":84,"./ReactRootIndex":93,"./ReactUpdates":102}],73:[function(require,module,exports){
+},{"./DOMProperty":14,"./EventPluginHub":21,"./ReactBrowserEventEmitter":36,"./ReactClass":41,"./ReactComponentEnvironment":44,"./ReactDOMComponent":51,"./ReactEmptyComponent":68,"./ReactNativeComponent":83,"./ReactPerf":85,"./ReactRootIndex":94,"./ReactUpdates":103}],74:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -12363,7 +14991,7 @@ var ReactInputSelection = {
 
 module.exports = ReactInputSelection;
 
-},{"./ReactDOMSelection":58,"./containsNode":126,"./focusNode":137,"./getActiveElement":139}],74:[function(require,module,exports){
+},{"./ReactDOMSelection":59,"./containsNode":127,"./focusNode":138,"./getActiveElement":140}],75:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -12699,7 +15327,7 @@ var ReactInstanceHandles = {
 module.exports = ReactInstanceHandles;
 
 }).call(this,require('_process'))
-},{"./ReactRootIndex":93,"./invariant":153,"_process":1}],75:[function(require,module,exports){
+},{"./ReactRootIndex":94,"./invariant":154,"_process":2}],76:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -12748,7 +15376,7 @@ var ReactInstanceMap = {
 
 module.exports = ReactInstanceMap;
 
-},{}],76:[function(require,module,exports){
+},{}],77:[function(require,module,exports){
 /**
  * Copyright 2015, Facebook, Inc.
  * All rights reserved.
@@ -12785,7 +15413,7 @@ var ReactLifeCycle = {
 
 module.exports = ReactLifeCycle;
 
-},{}],77:[function(require,module,exports){
+},{}],78:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -12858,7 +15486,7 @@ ReactLink.PropTypes = {
 
 module.exports = ReactLink;
 
-},{"./React":33}],78:[function(require,module,exports){
+},{"./React":34}],79:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -12906,7 +15534,7 @@ var ReactMarkupChecksum = {
 
 module.exports = ReactMarkupChecksum;
 
-},{"./adler32":122}],79:[function(require,module,exports){
+},{"./adler32":123}],80:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -13797,7 +16425,7 @@ ReactPerf.measureMethods(ReactMount, 'ReactMount', {
 module.exports = ReactMount;
 
 }).call(this,require('_process'))
-},{"./DOMProperty":13,"./ReactBrowserEventEmitter":35,"./ReactCurrentOwner":47,"./ReactElement":65,"./ReactElementValidator":66,"./ReactEmptyComponent":67,"./ReactInstanceHandles":74,"./ReactInstanceMap":75,"./ReactMarkupChecksum":78,"./ReactPerf":84,"./ReactReconciler":91,"./ReactUpdateQueue":101,"./ReactUpdates":102,"./containsNode":126,"./emptyObject":133,"./getReactRootElementInContainer":147,"./instantiateReactComponent":152,"./invariant":153,"./setInnerHTML":167,"./shouldUpdateReactComponent":170,"./warning":174,"_process":1}],80:[function(require,module,exports){
+},{"./DOMProperty":14,"./ReactBrowserEventEmitter":36,"./ReactCurrentOwner":48,"./ReactElement":66,"./ReactElementValidator":67,"./ReactEmptyComponent":68,"./ReactInstanceHandles":75,"./ReactInstanceMap":76,"./ReactMarkupChecksum":79,"./ReactPerf":85,"./ReactReconciler":92,"./ReactUpdateQueue":102,"./ReactUpdates":103,"./containsNode":127,"./emptyObject":134,"./getReactRootElementInContainer":148,"./instantiateReactComponent":153,"./invariant":154,"./setInnerHTML":168,"./shouldUpdateReactComponent":171,"./warning":175,"_process":2}],81:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -14227,7 +16855,7 @@ var ReactMultiChild = {
 
 module.exports = ReactMultiChild;
 
-},{"./ReactChildReconciler":38,"./ReactComponentEnvironment":43,"./ReactMultiChildUpdateTypes":81,"./ReactReconciler":91}],81:[function(require,module,exports){
+},{"./ReactChildReconciler":39,"./ReactComponentEnvironment":44,"./ReactMultiChildUpdateTypes":82,"./ReactReconciler":92}],82:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -14260,7 +16888,7 @@ var ReactMultiChildUpdateTypes = keyMirror({
 
 module.exports = ReactMultiChildUpdateTypes;
 
-},{"./keyMirror":159}],82:[function(require,module,exports){
+},{"./keyMirror":160}],83:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
@@ -14367,7 +16995,7 @@ var ReactNativeComponent = {
 module.exports = ReactNativeComponent;
 
 }).call(this,require('_process'))
-},{"./Object.assign":31,"./invariant":153,"_process":1}],83:[function(require,module,exports){
+},{"./Object.assign":32,"./invariant":154,"_process":2}],84:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -14479,7 +17107,7 @@ var ReactOwner = {
 module.exports = ReactOwner;
 
 }).call(this,require('_process'))
-},{"./invariant":153,"_process":1}],84:[function(require,module,exports){
+},{"./invariant":154,"_process":2}],85:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -14583,7 +17211,7 @@ function _noMeasure(objName, fnName, func) {
 module.exports = ReactPerf;
 
 }).call(this,require('_process'))
-},{"_process":1}],85:[function(require,module,exports){
+},{"_process":2}],86:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -14693,7 +17321,7 @@ var ReactPropTransferer = {
 
 module.exports = ReactPropTransferer;
 
-},{"./Object.assign":31,"./emptyFunction":132,"./joinClasses":158}],86:[function(require,module,exports){
+},{"./Object.assign":32,"./emptyFunction":133,"./joinClasses":159}],87:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -14721,7 +17349,7 @@ if ("production" !== process.env.NODE_ENV) {
 module.exports = ReactPropTypeLocationNames;
 
 }).call(this,require('_process'))
-},{"_process":1}],87:[function(require,module,exports){
+},{"_process":2}],88:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -14745,7 +17373,7 @@ var ReactPropTypeLocations = keyMirror({
 
 module.exports = ReactPropTypeLocations;
 
-},{"./keyMirror":159}],88:[function(require,module,exports){
+},{"./keyMirror":160}],89:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -15094,7 +17722,7 @@ function getPreciseType(propValue) {
 
 module.exports = ReactPropTypes;
 
-},{"./ReactElement":65,"./ReactFragment":71,"./ReactPropTypeLocationNames":86,"./emptyFunction":132}],89:[function(require,module,exports){
+},{"./ReactElement":66,"./ReactFragment":72,"./ReactPropTypeLocationNames":87,"./emptyFunction":133}],90:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -15150,7 +17778,7 @@ PooledClass.addPoolingTo(ReactPutListenerQueue);
 
 module.exports = ReactPutListenerQueue;
 
-},{"./Object.assign":31,"./PooledClass":32,"./ReactBrowserEventEmitter":35}],90:[function(require,module,exports){
+},{"./Object.assign":32,"./PooledClass":33,"./ReactBrowserEventEmitter":36}],91:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -15326,7 +17954,7 @@ PooledClass.addPoolingTo(ReactReconcileTransaction);
 
 module.exports = ReactReconcileTransaction;
 
-},{"./CallbackQueue":9,"./Object.assign":31,"./PooledClass":32,"./ReactBrowserEventEmitter":35,"./ReactInputSelection":73,"./ReactPutListenerQueue":89,"./Transaction":119}],91:[function(require,module,exports){
+},{"./CallbackQueue":10,"./Object.assign":32,"./PooledClass":33,"./ReactBrowserEventEmitter":36,"./ReactInputSelection":74,"./ReactPutListenerQueue":90,"./Transaction":120}],92:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -15450,7 +18078,7 @@ var ReactReconciler = {
 module.exports = ReactReconciler;
 
 }).call(this,require('_process'))
-},{"./ReactElementValidator":66,"./ReactRef":92,"_process":1}],92:[function(require,module,exports){
+},{"./ReactElementValidator":67,"./ReactRef":93,"_process":2}],93:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -15521,7 +18149,7 @@ ReactRef.detachRefs = function(instance, element) {
 
 module.exports = ReactRef;
 
-},{"./ReactOwner":83}],93:[function(require,module,exports){
+},{"./ReactOwner":84}],94:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -15552,7 +18180,7 @@ var ReactRootIndex = {
 
 module.exports = ReactRootIndex;
 
-},{}],94:[function(require,module,exports){
+},{}],95:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -15634,7 +18262,7 @@ module.exports = {
 };
 
 }).call(this,require('_process'))
-},{"./ReactElement":65,"./ReactInstanceHandles":74,"./ReactMarkupChecksum":78,"./ReactServerRenderingTransaction":95,"./emptyObject":133,"./instantiateReactComponent":152,"./invariant":153,"_process":1}],95:[function(require,module,exports){
+},{"./ReactElement":66,"./ReactInstanceHandles":75,"./ReactMarkupChecksum":79,"./ReactServerRenderingTransaction":96,"./emptyObject":134,"./instantiateReactComponent":153,"./invariant":154,"_process":2}],96:[function(require,module,exports){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -15747,7 +18375,7 @@ PooledClass.addPoolingTo(ReactServerRenderingTransaction);
 
 module.exports = ReactServerRenderingTransaction;
 
-},{"./CallbackQueue":9,"./Object.assign":31,"./PooledClass":32,"./ReactPutListenerQueue":89,"./Transaction":119,"./emptyFunction":132}],96:[function(require,module,exports){
+},{"./CallbackQueue":10,"./Object.assign":32,"./PooledClass":33,"./ReactPutListenerQueue":90,"./Transaction":120,"./emptyFunction":133}],97:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -15853,7 +18481,7 @@ ReactStateSetters.Mixin = {
 
 module.exports = ReactStateSetters;
 
-},{}],97:[function(require,module,exports){
+},{}],98:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -16367,7 +18995,7 @@ for (eventType in topLevelTypes) {
 
 module.exports = ReactTestUtils;
 
-},{"./EventConstants":18,"./EventPluginHub":20,"./EventPropagators":23,"./Object.assign":31,"./React":33,"./ReactBrowserEventEmitter":35,"./ReactCompositeComponent":45,"./ReactElement":65,"./ReactEmptyComponent":67,"./ReactInstanceHandles":74,"./ReactInstanceMap":75,"./ReactMount":79,"./ReactUpdates":102,"./SyntheticEvent":111,"./emptyObject":133}],98:[function(require,module,exports){
+},{"./EventConstants":19,"./EventPluginHub":21,"./EventPropagators":24,"./Object.assign":32,"./React":34,"./ReactBrowserEventEmitter":36,"./ReactCompositeComponent":46,"./ReactElement":66,"./ReactEmptyComponent":68,"./ReactInstanceHandles":75,"./ReactInstanceMap":76,"./ReactMount":80,"./ReactUpdates":103,"./SyntheticEvent":112,"./emptyObject":134}],99:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -16472,7 +19100,7 @@ var ReactTransitionChildMapping = {
 
 module.exports = ReactTransitionChildMapping;
 
-},{"./ReactChildren":39,"./ReactFragment":71}],99:[function(require,module,exports){
+},{"./ReactChildren":40,"./ReactFragment":72}],100:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -16583,7 +19211,7 @@ var ReactTransitionEvents = {
 
 module.exports = ReactTransitionEvents;
 
-},{"./ExecutionEnvironment":24}],100:[function(require,module,exports){
+},{"./ExecutionEnvironment":25}],101:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -16813,7 +19441,7 @@ var ReactTransitionGroup = React.createClass({
 
 module.exports = ReactTransitionGroup;
 
-},{"./Object.assign":31,"./React":33,"./ReactTransitionChildMapping":98,"./cloneWithProps":125,"./emptyFunction":132}],101:[function(require,module,exports){
+},{"./Object.assign":32,"./React":34,"./ReactTransitionChildMapping":99,"./cloneWithProps":126,"./emptyFunction":133}],102:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2015, Facebook, Inc.
@@ -17112,7 +19740,7 @@ var ReactUpdateQueue = {
 module.exports = ReactUpdateQueue;
 
 }).call(this,require('_process'))
-},{"./Object.assign":31,"./ReactCurrentOwner":47,"./ReactElement":65,"./ReactInstanceMap":75,"./ReactLifeCycle":76,"./ReactUpdates":102,"./invariant":153,"./warning":174,"_process":1}],102:[function(require,module,exports){
+},{"./Object.assign":32,"./ReactCurrentOwner":48,"./ReactElement":66,"./ReactInstanceMap":76,"./ReactLifeCycle":77,"./ReactUpdates":103,"./invariant":154,"./warning":175,"_process":2}],103:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -17394,7 +20022,7 @@ var ReactUpdates = {
 module.exports = ReactUpdates;
 
 }).call(this,require('_process'))
-},{"./CallbackQueue":9,"./Object.assign":31,"./PooledClass":32,"./ReactCurrentOwner":47,"./ReactPerf":84,"./ReactReconciler":91,"./Transaction":119,"./invariant":153,"./warning":174,"_process":1}],103:[function(require,module,exports){
+},{"./CallbackQueue":10,"./Object.assign":32,"./PooledClass":33,"./ReactCurrentOwner":48,"./ReactPerf":85,"./ReactReconciler":92,"./Transaction":120,"./invariant":154,"./warning":175,"_process":2}],104:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -17450,7 +20078,7 @@ if ("production" !== process.env.NODE_ENV) {
 module.exports = React;
 
 }).call(this,require('_process'))
-},{"./LinkedStateMixin":27,"./React":33,"./ReactCSSTransitionGroup":36,"./ReactComponentWithPureRenderMixin":44,"./ReactDefaultPerf":63,"./ReactFragment":71,"./ReactTestUtils":97,"./ReactTransitionGroup":100,"./ReactUpdates":102,"./cloneWithProps":125,"./cx":130,"./update":173,"_process":1}],104:[function(require,module,exports){
+},{"./LinkedStateMixin":28,"./React":34,"./ReactCSSTransitionGroup":37,"./ReactComponentWithPureRenderMixin":45,"./ReactDefaultPerf":64,"./ReactFragment":72,"./ReactTestUtils":98,"./ReactTransitionGroup":101,"./ReactUpdates":103,"./cloneWithProps":126,"./cx":131,"./update":174,"_process":2}],105:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -17544,7 +20172,7 @@ var SVGDOMPropertyConfig = {
 
 module.exports = SVGDOMPropertyConfig;
 
-},{"./DOMProperty":13}],105:[function(require,module,exports){
+},{"./DOMProperty":14}],106:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -17739,7 +20367,7 @@ var SelectEventPlugin = {
 
 module.exports = SelectEventPlugin;
 
-},{"./EventConstants":18,"./EventPropagators":23,"./ReactInputSelection":73,"./SyntheticEvent":111,"./getActiveElement":139,"./isTextInputElement":156,"./keyOf":160,"./shallowEqual":169}],106:[function(require,module,exports){
+},{"./EventConstants":19,"./EventPropagators":24,"./ReactInputSelection":74,"./SyntheticEvent":112,"./getActiveElement":140,"./isTextInputElement":157,"./keyOf":161,"./shallowEqual":170}],107:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -17770,7 +20398,7 @@ var ServerReactRootIndex = {
 
 module.exports = ServerReactRootIndex;
 
-},{}],107:[function(require,module,exports){
+},{}],108:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -18198,7 +20826,7 @@ var SimpleEventPlugin = {
 module.exports = SimpleEventPlugin;
 
 }).call(this,require('_process'))
-},{"./EventConstants":18,"./EventPluginUtils":22,"./EventPropagators":23,"./SyntheticClipboardEvent":108,"./SyntheticDragEvent":110,"./SyntheticEvent":111,"./SyntheticFocusEvent":112,"./SyntheticKeyboardEvent":114,"./SyntheticMouseEvent":115,"./SyntheticTouchEvent":116,"./SyntheticUIEvent":117,"./SyntheticWheelEvent":118,"./getEventCharCode":140,"./invariant":153,"./keyOf":160,"./warning":174,"_process":1}],108:[function(require,module,exports){
+},{"./EventConstants":19,"./EventPluginUtils":23,"./EventPropagators":24,"./SyntheticClipboardEvent":109,"./SyntheticDragEvent":111,"./SyntheticEvent":112,"./SyntheticFocusEvent":113,"./SyntheticKeyboardEvent":115,"./SyntheticMouseEvent":116,"./SyntheticTouchEvent":117,"./SyntheticUIEvent":118,"./SyntheticWheelEvent":119,"./getEventCharCode":141,"./invariant":154,"./keyOf":161,"./warning":175,"_process":2}],109:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18243,7 +20871,7 @@ SyntheticEvent.augmentClass(SyntheticClipboardEvent, ClipboardEventInterface);
 
 module.exports = SyntheticClipboardEvent;
 
-},{"./SyntheticEvent":111}],109:[function(require,module,exports){
+},{"./SyntheticEvent":112}],110:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18288,7 +20916,7 @@ SyntheticEvent.augmentClass(
 
 module.exports = SyntheticCompositionEvent;
 
-},{"./SyntheticEvent":111}],110:[function(require,module,exports){
+},{"./SyntheticEvent":112}],111:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18327,7 +20955,7 @@ SyntheticMouseEvent.augmentClass(SyntheticDragEvent, DragEventInterface);
 
 module.exports = SyntheticDragEvent;
 
-},{"./SyntheticMouseEvent":115}],111:[function(require,module,exports){
+},{"./SyntheticMouseEvent":116}],112:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18493,7 +21121,7 @@ PooledClass.addPoolingTo(SyntheticEvent, PooledClass.threeArgumentPooler);
 
 module.exports = SyntheticEvent;
 
-},{"./Object.assign":31,"./PooledClass":32,"./emptyFunction":132,"./getEventTarget":143}],112:[function(require,module,exports){
+},{"./Object.assign":32,"./PooledClass":33,"./emptyFunction":133,"./getEventTarget":144}],113:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18532,7 +21160,7 @@ SyntheticUIEvent.augmentClass(SyntheticFocusEvent, FocusEventInterface);
 
 module.exports = SyntheticFocusEvent;
 
-},{"./SyntheticUIEvent":117}],113:[function(require,module,exports){
+},{"./SyntheticUIEvent":118}],114:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18578,7 +21206,7 @@ SyntheticEvent.augmentClass(
 
 module.exports = SyntheticInputEvent;
 
-},{"./SyntheticEvent":111}],114:[function(require,module,exports){
+},{"./SyntheticEvent":112}],115:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18665,7 +21293,7 @@ SyntheticUIEvent.augmentClass(SyntheticKeyboardEvent, KeyboardEventInterface);
 
 module.exports = SyntheticKeyboardEvent;
 
-},{"./SyntheticUIEvent":117,"./getEventCharCode":140,"./getEventKey":141,"./getEventModifierState":142}],115:[function(require,module,exports){
+},{"./SyntheticUIEvent":118,"./getEventCharCode":141,"./getEventKey":142,"./getEventModifierState":143}],116:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18746,7 +21374,7 @@ SyntheticUIEvent.augmentClass(SyntheticMouseEvent, MouseEventInterface);
 
 module.exports = SyntheticMouseEvent;
 
-},{"./SyntheticUIEvent":117,"./ViewportMetrics":120,"./getEventModifierState":142}],116:[function(require,module,exports){
+},{"./SyntheticUIEvent":118,"./ViewportMetrics":121,"./getEventModifierState":143}],117:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18794,7 +21422,7 @@ SyntheticUIEvent.augmentClass(SyntheticTouchEvent, TouchEventInterface);
 
 module.exports = SyntheticTouchEvent;
 
-},{"./SyntheticUIEvent":117,"./getEventModifierState":142}],117:[function(require,module,exports){
+},{"./SyntheticUIEvent":118,"./getEventModifierState":143}],118:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18856,7 +21484,7 @@ SyntheticEvent.augmentClass(SyntheticUIEvent, UIEventInterface);
 
 module.exports = SyntheticUIEvent;
 
-},{"./SyntheticEvent":111,"./getEventTarget":143}],118:[function(require,module,exports){
+},{"./SyntheticEvent":112,"./getEventTarget":144}],119:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -18917,7 +21545,7 @@ SyntheticMouseEvent.augmentClass(SyntheticWheelEvent, WheelEventInterface);
 
 module.exports = SyntheticWheelEvent;
 
-},{"./SyntheticMouseEvent":115}],119:[function(require,module,exports){
+},{"./SyntheticMouseEvent":116}],120:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -19158,7 +21786,7 @@ var Transaction = {
 module.exports = Transaction;
 
 }).call(this,require('_process'))
-},{"./invariant":153,"_process":1}],120:[function(require,module,exports){
+},{"./invariant":154,"_process":2}],121:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -19187,7 +21815,7 @@ var ViewportMetrics = {
 
 module.exports = ViewportMetrics;
 
-},{}],121:[function(require,module,exports){
+},{}],122:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
@@ -19253,7 +21881,7 @@ function accumulateInto(current, next) {
 module.exports = accumulateInto;
 
 }).call(this,require('_process'))
-},{"./invariant":153,"_process":1}],122:[function(require,module,exports){
+},{"./invariant":154,"_process":2}],123:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -19287,7 +21915,7 @@ function adler32(data) {
 
 module.exports = adler32;
 
-},{}],123:[function(require,module,exports){
+},{}],124:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -19319,7 +21947,7 @@ function camelize(string) {
 
 module.exports = camelize;
 
-},{}],124:[function(require,module,exports){
+},{}],125:[function(require,module,exports){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -19361,7 +21989,7 @@ function camelizeStyleName(string) {
 
 module.exports = camelizeStyleName;
 
-},{"./camelize":123}],125:[function(require,module,exports){
+},{"./camelize":124}],126:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -19420,7 +22048,7 @@ function cloneWithProps(child, props) {
 module.exports = cloneWithProps;
 
 }).call(this,require('_process'))
-},{"./ReactElement":65,"./ReactPropTransferer":85,"./keyOf":160,"./warning":174,"_process":1}],126:[function(require,module,exports){
+},{"./ReactElement":66,"./ReactPropTransferer":86,"./keyOf":161,"./warning":175,"_process":2}],127:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -19464,7 +22092,7 @@ function containsNode(outerNode, innerNode) {
 
 module.exports = containsNode;
 
-},{"./isTextNode":157}],127:[function(require,module,exports){
+},{"./isTextNode":158}],128:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -19550,7 +22178,7 @@ function createArrayFromMixed(obj) {
 
 module.exports = createArrayFromMixed;
 
-},{"./toArray":171}],128:[function(require,module,exports){
+},{"./toArray":172}],129:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -19612,7 +22240,7 @@ function createFullPageComponent(tag) {
 module.exports = createFullPageComponent;
 
 }).call(this,require('_process'))
-},{"./ReactClass":40,"./ReactElement":65,"./invariant":153,"_process":1}],129:[function(require,module,exports){
+},{"./ReactClass":41,"./ReactElement":66,"./invariant":154,"_process":2}],130:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -19702,7 +22330,7 @@ function createNodesFromMarkup(markup, handleScript) {
 module.exports = createNodesFromMarkup;
 
 }).call(this,require('_process'))
-},{"./ExecutionEnvironment":24,"./createArrayFromMixed":127,"./getMarkupWrap":145,"./invariant":153,"_process":1}],130:[function(require,module,exports){
+},{"./ExecutionEnvironment":25,"./createArrayFromMixed":128,"./getMarkupWrap":146,"./invariant":154,"_process":2}],131:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -19758,7 +22386,7 @@ function cx(classNames) {
 module.exports = cx;
 
 }).call(this,require('_process'))
-},{"./warning":174,"_process":1}],131:[function(require,module,exports){
+},{"./warning":175,"_process":2}],132:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -19816,7 +22444,7 @@ function dangerousStyleValue(name, value) {
 
 module.exports = dangerousStyleValue;
 
-},{"./CSSProperty":7}],132:[function(require,module,exports){
+},{"./CSSProperty":8}],133:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -19850,7 +22478,7 @@ emptyFunction.thatReturnsArgument = function(arg) { return arg; };
 
 module.exports = emptyFunction;
 
-},{}],133:[function(require,module,exports){
+},{}],134:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -19874,7 +22502,7 @@ if ("production" !== process.env.NODE_ENV) {
 module.exports = emptyObject;
 
 }).call(this,require('_process'))
-},{"_process":1}],134:[function(require,module,exports){
+},{"_process":2}],135:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -19914,7 +22542,7 @@ function escapeTextContentForBrowser(text) {
 
 module.exports = escapeTextContentForBrowser;
 
-},{}],135:[function(require,module,exports){
+},{}],136:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -19987,7 +22615,7 @@ function findDOMNode(componentOrElement) {
 module.exports = findDOMNode;
 
 }).call(this,require('_process'))
-},{"./ReactCurrentOwner":47,"./ReactInstanceMap":75,"./ReactMount":79,"./invariant":153,"./isNode":155,"./warning":174,"_process":1}],136:[function(require,module,exports){
+},{"./ReactCurrentOwner":48,"./ReactInstanceMap":76,"./ReactMount":80,"./invariant":154,"./isNode":156,"./warning":175,"_process":2}],137:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -20045,7 +22673,7 @@ function flattenChildren(children) {
 module.exports = flattenChildren;
 
 }).call(this,require('_process'))
-},{"./traverseAllChildren":172,"./warning":174,"_process":1}],137:[function(require,module,exports){
+},{"./traverseAllChildren":173,"./warning":175,"_process":2}],138:[function(require,module,exports){
 /**
  * Copyright 2014-2015, Facebook, Inc.
  * All rights reserved.
@@ -20074,7 +22702,7 @@ function focusNode(node) {
 
 module.exports = focusNode;
 
-},{}],138:[function(require,module,exports){
+},{}],139:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20105,7 +22733,7 @@ var forEachAccumulated = function(arr, cb, scope) {
 
 module.exports = forEachAccumulated;
 
-},{}],139:[function(require,module,exports){
+},{}],140:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20134,7 +22762,7 @@ function getActiveElement() /*?DOMElement*/ {
 
 module.exports = getActiveElement;
 
-},{}],140:[function(require,module,exports){
+},{}],141:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20186,7 +22814,7 @@ function getEventCharCode(nativeEvent) {
 
 module.exports = getEventCharCode;
 
-},{}],141:[function(require,module,exports){
+},{}],142:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20291,7 +22919,7 @@ function getEventKey(nativeEvent) {
 
 module.exports = getEventKey;
 
-},{"./getEventCharCode":140}],142:[function(require,module,exports){
+},{"./getEventCharCode":141}],143:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20338,7 +22966,7 @@ function getEventModifierState(nativeEvent) {
 
 module.exports = getEventModifierState;
 
-},{}],143:[function(require,module,exports){
+},{}],144:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20369,7 +22997,7 @@ function getEventTarget(nativeEvent) {
 
 module.exports = getEventTarget;
 
-},{}],144:[function(require,module,exports){
+},{}],145:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20413,7 +23041,7 @@ function getIteratorFn(maybeIterable) {
 
 module.exports = getIteratorFn;
 
-},{}],145:[function(require,module,exports){
+},{}],146:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -20532,7 +23160,7 @@ function getMarkupWrap(nodeName) {
 module.exports = getMarkupWrap;
 
 }).call(this,require('_process'))
-},{"./ExecutionEnvironment":24,"./invariant":153,"_process":1}],146:[function(require,module,exports){
+},{"./ExecutionEnvironment":25,"./invariant":154,"_process":2}],147:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20607,7 +23235,7 @@ function getNodeForCharacterOffset(root, offset) {
 
 module.exports = getNodeForCharacterOffset;
 
-},{}],147:[function(require,module,exports){
+},{}],148:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20642,7 +23270,7 @@ function getReactRootElementInContainer(container) {
 
 module.exports = getReactRootElementInContainer;
 
-},{}],148:[function(require,module,exports){
+},{}],149:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20679,7 +23307,7 @@ function getTextContentAccessor() {
 
 module.exports = getTextContentAccessor;
 
-},{"./ExecutionEnvironment":24}],149:[function(require,module,exports){
+},{"./ExecutionEnvironment":25}],150:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20719,7 +23347,7 @@ function getUnboundedScrollPosition(scrollable) {
 
 module.exports = getUnboundedScrollPosition;
 
-},{}],150:[function(require,module,exports){
+},{}],151:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20752,7 +23380,7 @@ function hyphenate(string) {
 
 module.exports = hyphenate;
 
-},{}],151:[function(require,module,exports){
+},{}],152:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -20793,7 +23421,7 @@ function hyphenateStyleName(string) {
 
 module.exports = hyphenateStyleName;
 
-},{"./hyphenate":150}],152:[function(require,module,exports){
+},{"./hyphenate":151}],153:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -20931,7 +23559,7 @@ function instantiateReactComponent(node, parentCompositeType) {
 module.exports = instantiateReactComponent;
 
 }).call(this,require('_process'))
-},{"./Object.assign":31,"./ReactCompositeComponent":45,"./ReactEmptyComponent":67,"./ReactNativeComponent":82,"./invariant":153,"./warning":174,"_process":1}],153:[function(require,module,exports){
+},{"./Object.assign":32,"./ReactCompositeComponent":46,"./ReactEmptyComponent":68,"./ReactNativeComponent":83,"./invariant":154,"./warning":175,"_process":2}],154:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -20988,7 +23616,7 @@ var invariant = function(condition, format, a, b, c, d, e, f) {
 module.exports = invariant;
 
 }).call(this,require('_process'))
-},{"_process":1}],154:[function(require,module,exports){
+},{"_process":2}],155:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21053,7 +23681,7 @@ function isEventSupported(eventNameSuffix, capture) {
 
 module.exports = isEventSupported;
 
-},{"./ExecutionEnvironment":24}],155:[function(require,module,exports){
+},{"./ExecutionEnvironment":25}],156:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21080,7 +23708,7 @@ function isNode(object) {
 
 module.exports = isNode;
 
-},{}],156:[function(require,module,exports){
+},{}],157:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21123,7 +23751,7 @@ function isTextInputElement(elem) {
 
 module.exports = isTextInputElement;
 
-},{}],157:[function(require,module,exports){
+},{}],158:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21148,7 +23776,7 @@ function isTextNode(object) {
 
 module.exports = isTextNode;
 
-},{"./isNode":155}],158:[function(require,module,exports){
+},{"./isNode":156}],159:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21189,7 +23817,7 @@ function joinClasses(className/*, ... */) {
 
 module.exports = joinClasses;
 
-},{}],159:[function(require,module,exports){
+},{}],160:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -21244,7 +23872,7 @@ var keyMirror = function(obj) {
 module.exports = keyMirror;
 
 }).call(this,require('_process'))
-},{"./invariant":153,"_process":1}],160:[function(require,module,exports){
+},{"./invariant":154,"_process":2}],161:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21280,7 +23908,7 @@ var keyOf = function(oneKeyObj) {
 
 module.exports = keyOf;
 
-},{}],161:[function(require,module,exports){
+},{}],162:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21333,7 +23961,7 @@ function mapObject(object, callback, context) {
 
 module.exports = mapObject;
 
-},{}],162:[function(require,module,exports){
+},{}],163:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21366,7 +23994,7 @@ function memoizeStringOnly(callback) {
 
 module.exports = memoizeStringOnly;
 
-},{}],163:[function(require,module,exports){
+},{}],164:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -21406,7 +24034,7 @@ function onlyChild(children) {
 module.exports = onlyChild;
 
 }).call(this,require('_process'))
-},{"./ReactElement":65,"./invariant":153,"_process":1}],164:[function(require,module,exports){
+},{"./ReactElement":66,"./invariant":154,"_process":2}],165:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21434,7 +24062,7 @@ if (ExecutionEnvironment.canUseDOM) {
 
 module.exports = performance || {};
 
-},{"./ExecutionEnvironment":24}],165:[function(require,module,exports){
+},{"./ExecutionEnvironment":25}],166:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21462,7 +24090,7 @@ var performanceNow = performance.now.bind(performance);
 
 module.exports = performanceNow;
 
-},{"./performance":164}],166:[function(require,module,exports){
+},{"./performance":165}],167:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21490,7 +24118,7 @@ function quoteAttributeValueForBrowser(value) {
 
 module.exports = quoteAttributeValueForBrowser;
 
-},{"./escapeTextContentForBrowser":134}],167:[function(require,module,exports){
+},{"./escapeTextContentForBrowser":135}],168:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21579,7 +24207,7 @@ if (ExecutionEnvironment.canUseDOM) {
 
 module.exports = setInnerHTML;
 
-},{"./ExecutionEnvironment":24}],168:[function(require,module,exports){
+},{"./ExecutionEnvironment":25}],169:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21621,7 +24249,7 @@ if (ExecutionEnvironment.canUseDOM) {
 
 module.exports = setTextContent;
 
-},{"./ExecutionEnvironment":24,"./escapeTextContentForBrowser":134,"./setInnerHTML":167}],169:[function(require,module,exports){
+},{"./ExecutionEnvironment":25,"./escapeTextContentForBrowser":135,"./setInnerHTML":168}],170:[function(require,module,exports){
 /**
  * Copyright 2013-2015, Facebook, Inc.
  * All rights reserved.
@@ -21665,7 +24293,7 @@ function shallowEqual(objA, objB) {
 
 module.exports = shallowEqual;
 
-},{}],170:[function(require,module,exports){
+},{}],171:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -21769,7 +24397,7 @@ function shouldUpdateReactComponent(prevElement, nextElement) {
 module.exports = shouldUpdateReactComponent;
 
 }).call(this,require('_process'))
-},{"./warning":174,"_process":1}],171:[function(require,module,exports){
+},{"./warning":175,"_process":2}],172:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
@@ -21841,7 +24469,7 @@ function toArray(obj) {
 module.exports = toArray;
 
 }).call(this,require('_process'))
-},{"./invariant":153,"_process":1}],172:[function(require,module,exports){
+},{"./invariant":154,"_process":2}],173:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -22094,7 +24722,7 @@ function traverseAllChildren(children, callback, traverseContext) {
 module.exports = traverseAllChildren;
 
 }).call(this,require('_process'))
-},{"./ReactElement":65,"./ReactFragment":71,"./ReactInstanceHandles":74,"./getIteratorFn":144,"./invariant":153,"./warning":174,"_process":1}],173:[function(require,module,exports){
+},{"./ReactElement":66,"./ReactFragment":72,"./ReactInstanceHandles":75,"./getIteratorFn":145,"./invariant":154,"./warning":175,"_process":2}],174:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2013-2015, Facebook, Inc.
@@ -22265,7 +24893,7 @@ function update(value, spec) {
 module.exports = update;
 
 }).call(this,require('_process'))
-},{"./Object.assign":31,"./invariant":153,"./keyOf":160,"_process":1}],174:[function(require,module,exports){
+},{"./Object.assign":32,"./invariant":154,"./keyOf":161,"_process":2}],175:[function(require,module,exports){
 (function (process){
 /**
  * Copyright 2014-2015, Facebook, Inc.
@@ -22328,10 +24956,10 @@ if ("production" !== process.env.NODE_ENV) {
 module.exports = warning;
 
 }).call(this,require('_process'))
-},{"./emptyFunction":132,"_process":1}],175:[function(require,module,exports){
+},{"./emptyFunction":133,"_process":2}],176:[function(require,module,exports){
 module.exports = require('./lib/React');
 
-},{"./lib/React":33}],176:[function(require,module,exports){
+},{"./lib/React":34}],177:[function(require,module,exports){
 'use strict';
 
 function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { 'default': obj }; }
@@ -22345,7 +24973,7 @@ var _componentsAppJsx = require('./components/App.jsx');
 var _componentsAppJsx2 = _interopRequireDefault(_componentsAppJsx);
 
 _react2['default'].render(_react2['default'].createElement(_componentsAppJsx2['default'], null), document.getElementById('app'));
-},{"./components/App.jsx":177,"react":175}],177:[function(require,module,exports){
+},{"./components/App.jsx":178,"react":176}],178:[function(require,module,exports){
 'use strict';
 
 Object.defineProperty(exports, '__esModule', {
@@ -22369,6 +24997,10 @@ var _react2 = _interopRequireDefault(_react);
 var _ChartsSimpleStockChartJsx = require('./Charts/SimpleStockChart.jsx');
 
 var _ChartsSimpleStockChartJsx2 = _interopRequireDefault(_ChartsSimpleStockChartJsx);
+
+var _ChartsSimplePolarChartJsx = require('./Charts/SimplePolarChart.jsx');
+
+var _ChartsSimplePolarChartJsx2 = _interopRequireDefault(_ChartsSimplePolarChartJsx);
 
 var _ChartsSimpleChartJsx = require('./Charts/SimpleChart.jsx');
 
@@ -22401,6 +25033,20 @@ var App = (function (_React$Component) {
                 tooltip: {
                     valueDecimals: 2
                 }
+            }],
+            simplePolarChartSeries: [{
+                type: 'column',
+                name: 'Column',
+                data: [8, 7, 6, 5, 4, 3, 2, 1],
+                pointPlacement: 'between'
+            }, {
+                type: 'line',
+                name: 'Line',
+                data: [1, 2, 3, 4, 5, 6, 7, 8]
+            }, {
+                type: 'area',
+                name: 'Area',
+                data: [1, 8, 2, 7, 3, 6, 4, 5]
             }]
         };
     }
@@ -22412,7 +25058,8 @@ var App = (function (_React$Component) {
                 'div',
                 null,
                 _react2['default'].createElement(_ChartsSimpleChartJsx2['default'], { series: this.state.simpleChartSeries }),
-                _react2['default'].createElement(_ChartsSimpleStockChartJsx2['default'], { series: this.state.simpleStockChartSeries })
+                _react2['default'].createElement(_ChartsSimpleStockChartJsx2['default'], { series: this.state.simpleStockChartSeries }),
+                _react2['default'].createElement(_ChartsSimplePolarChartJsx2['default'], { series: this.state.simplePolarChartSeries })
             );
         }
     }]);
@@ -22422,7 +25069,7 @@ var App = (function (_React$Component) {
 
 exports['default'] = App;
 module.exports = exports['default'];
-},{"./Charts/SimpleChart.jsx":179,"./Charts/SimpleStockChart.jsx":180,"react":175}],178:[function(require,module,exports){
+},{"./Charts/SimpleChart.jsx":180,"./Charts/SimplePolarChart.jsx":181,"./Charts/SimpleStockChart.jsx":182,"react":176}],179:[function(require,module,exports){
 'use strict';
 
 Object.defineProperty(exports, '__esModule', {
@@ -22482,6 +25129,10 @@ var BaseChart = (function (_React$Component) {
                 case 'Highcharts':
                     this.chart = new _highstockBrowserify2['default'].Chart(config);
                     break;
+                case 'HighchartsMore':
+                    require('Highcharts/js/highcharts-more.src.js');
+                    this.chart = new _highstockBrowserify2['default'].Chart(config);
+                    break;
                 default:
                     throw new Error('Cannot match chart type. keys[ Highstock or Highcharts ] input[ ' + chartType + ' ]');
                     break;
@@ -22523,7 +25174,7 @@ BaseChart.PropTypes = {
     ref: _react2['default'].PropTypes.string.isRequired
 };
 module.exports = exports['default'];
-},{"highstock-browserify":2,"react":175,"react/addons":3}],179:[function(require,module,exports){
+},{"Highcharts/js/highcharts-more.src.js":1,"highstock-browserify":3,"react":176,"react/addons":4}],180:[function(require,module,exports){
 'use strict';
 
 Object.defineProperty(exports, '__esModule', {
@@ -22595,7 +25246,6 @@ var SimpleChart = (function (_React$Component) {
         value: function render() {
             var highChart = _react2['default'].createElement('div', null);
             if (typeof window !== "undefined") {
-                //if(window){
                 var Chart = require('./BaseChart.jsx');
                 highChart = _react2['default'].createElement(Chart, { type: 'Highcharts', config: this.changeConfig(this.props.series), ref: 'highChart' });
             }
@@ -22616,7 +25266,107 @@ SimpleChart.PropTypes = {
     series: _react2['default'].PropTypes.object.isRequired
 };
 module.exports = exports['default'];
-},{"./BaseChart.jsx":178,"react":175}],180:[function(require,module,exports){
+},{"./BaseChart.jsx":179,"react":176}],181:[function(require,module,exports){
+'use strict';
+
+Object.defineProperty(exports, '__esModule', {
+    value: true
+});
+
+var _createClass = (function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ('value' in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; })();
+
+var _get = function get(_x, _x2, _x3) { var _again = true; _function: while (_again) { var object = _x, property = _x2, receiver = _x3; desc = parent = getter = undefined; _again = false; if (object === null) object = Function.prototype; var desc = Object.getOwnPropertyDescriptor(object, property); if (desc === undefined) { var parent = Object.getPrototypeOf(object); if (parent === null) { return undefined; } else { _x = parent; _x2 = property; _x3 = receiver; _again = true; continue _function; } } else if ('value' in desc) { return desc.value; } else { var getter = desc.get; if (getter === undefined) { return undefined; } return getter.call(receiver); } } };
+
+function _interopRequireDefault(obj) { return obj && obj.__esModule ? obj : { 'default': obj }; }
+
+function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError('Cannot call a class as a function'); } }
+
+function _inherits(subClass, superClass) { if (typeof superClass !== 'function' && superClass !== null) { throw new TypeError('Super expression must either be null or a function, not ' + typeof superClass); } subClass.prototype = Object.create(superClass && superClass.prototype, { constructor: { value: subClass, enumerable: false, writable: true, configurable: true } }); if (superClass) Object.setPrototypeOf ? Object.setPrototypeOf(subClass, superClass) : subClass.__proto__ = superClass; }
+
+var _react = require('react');
+
+var _react2 = _interopRequireDefault(_react);
+
+var SimplePolarChart = (function (_React$Component) {
+    _inherits(SimplePolarChart, _React$Component);
+
+    function SimplePolarChart() {
+        _classCallCheck(this, SimplePolarChart);
+
+        _get(Object.getPrototypeOf(SimplePolarChart.prototype), 'constructor', this).apply(this, arguments);
+    }
+
+    _createClass(SimplePolarChart, [{
+        key: 'changeConfig',
+        value: function changeConfig(series) {
+            return {
+                chart: {
+                    polar: true
+                },
+
+                title: {
+                    text: 'Highcharts Polar Chart'
+                },
+
+                pane: {
+                    startAngle: 0,
+                    endAngle: 360
+                },
+
+                xAxis: {
+                    tickInterval: 45,
+                    min: 0,
+                    max: 360,
+                    labels: {
+                        formatter: function formatter() {
+                            return this.value + '°';
+                        }
+                    }
+                },
+
+                yAxis: {
+                    min: 0
+                },
+
+                plotOptions: {
+                    series: {
+                        pointStart: 0,
+                        pointInterval: 45
+                    },
+                    column: {
+                        pointPadding: 0,
+                        groupPadding: 0
+                    }
+                },
+                series: series
+            };
+        }
+    }, {
+        key: 'render',
+        value: function render() {
+            var highChart = _react2['default'].createElement('div', null);
+            if (typeof window !== "undefined") {
+                var Chart = require('./BaseChart.jsx');
+                highChart = _react2['default'].createElement(Chart, { type: 'HighchartsMore', config: this.changeConfig(this.props.series), ref: 'highPolarChart' });
+            }
+            return _react2['default'].createElement(
+                'div',
+                null,
+                highChart
+            );
+        }
+    }]);
+
+    return SimplePolarChart;
+})(_react2['default'].Component);
+
+exports['default'] = SimplePolarChart;
+
+SimplePolarChart.PropTypes = {
+    series: _react2['default'].PropTypes.object.isRequired
+};
+module.exports = exports['default'];
+},{"./BaseChart.jsx":179,"react":176}],182:[function(require,module,exports){
 'use strict';
 
 Object.defineProperty(exports, '__esModule', {
@@ -22664,7 +25414,6 @@ var SimpleStockChart = (function (_React$Component) {
         value: function render() {
             var highstockChart = _react2['default'].createElement('div', null);
             if (typeof window !== "undefined") {
-                //if(window){
                 var Chart = require('./BaseChart.jsx');
                 highstockChart = _react2['default'].createElement(Chart, { type: 'Highstock', config: this.changeConfig(this.props.series), ref: 'highstockChart' });
             }
@@ -22685,4 +25434,4 @@ SimpleStockChart.PropTypes = {
     series: _react2['default'].PropTypes.object.isRequired
 };
 module.exports = exports['default'];
-},{"./BaseChart.jsx":178,"react":175}]},{},[176]);
+},{"./BaseChart.jsx":179,"react":176}]},{},[177]);

@@ -22526,7 +22526,7 @@ module.exports=[
         "id"      : "color",
         "options" : { "link" : "/applist"},
         "icon"    : "fa fa-cubes",
-        "text"    : "applist",
+        "text"    : "color",
         "active"  : false,
         "navlist" : [
             {

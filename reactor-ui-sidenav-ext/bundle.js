@@ -21972,7 +21972,7 @@ var ChildNavGroup = React.createClass({
 
         if (this.props.nav) {
             return this.props.nav.navlist.map(function (nav) {
-                return React.createElement(Nav, _extends({ key : nav.id, selected: _this.state.selected, onClick: _this.onSubNavClick }, nav));
+                return React.createElement(Nav, _extends({ key : nav.id, selected: _this.state.selected, onClick: _this.onSubNavClick, words : _this.props.words }, nav));
             });
         } else {
             return this.props.children;
@@ -22111,7 +22111,7 @@ var IconTextSchemeMixin = {
 
         var contentEls = [],
             propsIcon = this.props.icon,
-            propsText = this.props.text,
+            propsText = (this.props.words && this.props.words[this.props.text]) ? this.props.words[this.props.text] : this.props.text,
             icon,
             text,
             style = this.props.style; //style= it = icon text, ti , text icon, tbi text below icon
@@ -22123,7 +22123,11 @@ var IconTextSchemeMixin = {
             propsIcon = this.props.nav.icon;
         }
         if (!propsText && this.props.nav) {
-            propsText = this.props.nav.text;
+            if(this.props.words && this.props.words[this.props.nav.text]){
+                propsText = this.props.words[this.props.nav.text];
+            }else{
+                propsText = this.props.nav.text;
+            }
         }
 
         if (propsIcon) {
@@ -22152,6 +22156,7 @@ var IconTextSchemeMixin = {
 };
 
 module.exports = IconTextSchemeMixin;
+
 },{"react":174}],180:[function(require,module,exports){
 
 "use strict";
@@ -22268,12 +22273,12 @@ var NavGroup = React.createClass({
                 if (nav.navlist) {
                     return React.createElement(
                         ChildNavGroup, 
-                        { key : nav.id, selected: _this.state.selected, onClick: _this.onChildNavClick, anotherAction : _this.onSubNavClick, nav: nav }
+                        { key : nav.id, selected: _this.state.selected, onClick: _this.onChildNavClick, anotherAction : _this.onSubNavClick, nav: nav, words : _this.props.words }
                     );
                 } else {
                     return React.createElement(
                         Nav, 
-                        _extends({ key : nav.id, selected: _this.state.selected }, nav, { onClick: _this.onSubNavClick }, {group : nav.id})
+                        _extends({ key : nav.id, selected: _this.state.selected }, nav, { onClick: _this.onSubNavClick }, {group : nav.id}, {words : _this.props.words})
                     );
                 }
             });
@@ -22388,10 +22393,9 @@ var SideNav = React.createClass({
 
     buildFromSettings: function buildFromSettings() {
         var _this = this;
-
+        var words = (this.props.words) ? this.props.words : {};
         return this.props.navs.map(function (navkind) {
             //nav kind could have a navlist, which we assume it contains a group of navs options
-            //console.log('SideNav.buildFromSettings.navkind', navkind);
             if (navkind.navlist) {
                 var selected = {
                     id    : _this.state.selected.id,
@@ -22399,24 +22403,22 @@ var SideNav = React.createClass({
                 };
                 return React.createElement(
                     NavGroup,
-                    { key : navkind.id, selected: selected, onClick: _this.onSubNavClick, anotherAction : _this.onClick, nav: navkind }
+                    { key : navkind.id, selected: selected, onClick: _this.onSubNavClick, anotherAction : _this.onClick, nav: navkind, words : words }
                 );
             } else {
                 return React.createElement(
                     Nav,
-                    _extends( {key : navkind.id}, { selected: _this.state.selected }, navkind, { onClick: _this.onClick }, {group : navkind.id})
+                    _extends( {key : navkind.id}, { selected: _this.state.selected }, navkind, { onClick: _this.onClick }, {group : navkind.id}, {words : words})
                 );
             }
         });
     },
     onSubNavClick: function onSubNavClick(group, child, options) {
         var selection = { group: group, id: child, options : options};
-        //console.log('SideNav.onSubNavClick.selection', selection);
         this.setState({ selected: selection });
         this.dispatchSelection(selection);
     },
     onClick: function onClick(id, options) {
-        //console.log('SideNav.onClick.options', options);
         var selection = { id: id, options : options };
         this.setState({ selected: selection });
         this.dispatchSelection(selection);
@@ -22487,6 +22489,10 @@ var _constantsVariablesSideNavJson = require('../constants/variables/SideNav.jso
 
 var _constantsVariablesSideNavJson2 = _interopRequireDefault(_constantsVariablesSideNavJson);
 
+var _constantsVariablesWordsJson = require('../constants/variables/Words.json');
+
+var _constantsVariablesWordsJson2 = _interopRequireDefault(_constantsVariablesWordsJson);
+
 var _reactorUiSidenavExt = require('reactor-ui-sidenav-ext');
 
 var App = (function (_React$Component) {
@@ -22510,7 +22516,7 @@ var App = (function (_React$Component) {
             return _react2['default'].createElement(
                 'div',
                 { className: 'rui-snav-area' },
-                _react2['default'].createElement(_reactorUiSidenavExt.SideNav, { navs: _constantsVariablesSideNavJson2['default'], onSelection: this.onSelection.bind(this) })
+                _react2['default'].createElement(_reactorUiSidenavExt.SideNav, { navs: _constantsVariablesSideNavJson2['default'], words: _constantsVariablesWordsJson2['default'], onSelection: this.onSelection.bind(this) })
             );
         }
     }]);
@@ -22520,7 +22526,7 @@ var App = (function (_React$Component) {
 
 exports['default'] = App;
 module.exports = exports['default'];
-},{"../constants/variables/SideNav.json":185,"react":174,"reactor-ui-sidenav-ext":175}],185:[function(require,module,exports){
+},{"../constants/variables/SideNav.json":185,"../constants/variables/Words.json":186,"react":174,"reactor-ui-sidenav-ext":175}],185:[function(require,module,exports){
 module.exports=[
     {
         "id"      : "color",
@@ -22551,7 +22557,7 @@ module.exports=[
                         "active"  : false
                     },
                     {
-                        "id"      : "tomatoe",
+                        "id"      : "tomate",
                         "options" : { "link" : "/"},
                         "icon"    : "fa fa-circle-o",
                         "text"    : "tomate",
@@ -22608,5 +22614,14 @@ module.exports=[
         ]
     }
 ]
+
+},{}],186:[function(require,module,exports){
+module.exports={
+    "color"         : "色",
+    "blue"          : "青",
+    "red"           : "赤",
+    "apple"         : "りんご",
+    "tomate"        : "トマト"
+}
 
 },{}]},{},[183]);
